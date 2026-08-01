@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>WhatsApp Immobilien-Bot (Simulation)</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: #f0f2f5; display: flex; height: 100vh;
+  }
+  .panel { display: flex; flex-direction: column; }
+  .chat-panel { width: 420px; border-right: 1px solid #d1d7db; background: #efeae2; }
+  .chat-header {
+    background: #075e54; color: #fff; padding: 14px 16px; font-weight: 600;
+  }
+  .phone-row { padding: 8px 12px; background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
+  .phone-row .row { display: flex; gap: 6px; }
+  .phone-row input, .phone-row select { flex: 1; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; }
+  .phone-row button { padding: 6px 10px; border: none; border-radius: 6px; background: #075e54; color: #fff; cursor: pointer; }
+  .phone-row label { font-size: 11px; color: #666; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .bubble { max-width: 80%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; font-size: 14px; line-height: 1.4; }
+  .bubble.user { align-self: flex-end; background: #dcf8c6; }
+  .bubble.bot { align-self: flex-start; background: #fff; }
+  .compose { display: flex; padding: 10px; gap: 8px; background: #f0f0f0; }
+  .compose input { flex: 1; padding: 10px; border-radius: 20px; border: 1px solid #ccc; }
+  .compose button { padding: 10px 16px; border: none; border-radius: 20px; background: #25d366; color: #fff; cursor: pointer; }
+  .admin-panel { flex: 1; padding: 20px; overflow-y: auto; }
+  .admin-panel h2 { margin-top: 0; }
+  .admin-panel fieldset { border: 1px solid #d1d7db; border-radius: 8px; margin-bottom: 20px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .form-grid label { font-size: 12px; color: #555; display: flex; flex-direction: column; gap: 2px; }
+  .form-grid input, .form-grid select { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+  .admin-panel button.primary { margin-top: 10px; padding: 8px 14px; border: none; border-radius: 6px; background: #075e54; color: #fff; cursor: pointer; }
+  .admin-panel button.approve { padding: 4px 10px; border: none; border-radius: 4px; background: #3e5c4e; color: #fff; cursor: pointer; }
+  .admin-panel button.reject { padding: 4px 10px; border: none; border-radius: 4px; background: #b00020; color: #fff; cursor: pointer; margin-left: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eee; }
+  #simulateResult { margin-top: 8px; font-size: 13px; color: #075e54; white-space: pre-wrap; }
+  .hint { font-size: 12px; color: #888; margin-top: -6px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<div class="panel chat-panel">
+  <div class="chat-header">📱 Immobilien-Bot (Simulation) - ein Bot fuer alle</div>
+  <div class="phone-row">
+    <label>Admin-Key (nur einmal noetig, wird lokal gespeichert)</label>
+    <div class="row">
+      <input id="adminKeyInput" type="password" placeholder="ADMIN_API_KEY">
+      <button onclick="saveAdminKey()">Speichern</button>
+    </div>
+    <label>Telefonnummer (simuliert den WhatsApp-Absender)</label>
+    <div class="row">
+      <input id="phoneInput" value="+41791234567">
+      <button onclick="loadHistory()">Laden</button>
+    </div>
+  </div>
+  <div id="messages"></div>
+  <div class="compose">
+    <input id="textInput" placeholder="Nachricht eingeben..." onkeydown="if(event.key==='Enter') sendMessage()">
+    <button onclick="sendMessage()">Senden</button>
+  </div>
+</div>
+
+<div class="panel admin-panel">
+  <h2>Admin: Inserate zur Pruefung</h2>
+  <div class="hint">Inserate, die Vermieter per WhatsApp eingereicht haben - erst nach Freigabe fuer Mieter sichtbar.</div>
+  <fieldset>
+    <button onclick="loadPending()">Aktualisieren</button>
+    <table id="pendingTable"><thead><tr><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Anbieter</th><th></th></tr></thead><tbody></tbody></table>
+  </fieldset>
+
+  <h2>Admin: Testinserat direkt aktiv anlegen</h2>
+  <fieldset>
+    <legend>Inserat (umgeht die Pruefung, nur zum Testen)</legend>
+    <div class="form-grid">
+      <label>Firma/Anbieter <select id="f_firma"></select></label>
+      <label>Titel <input id="f_titel" value="Neue 2.5-Zimmer-Wohnung"></label>
+      <label>Objekttyp <input id="f_objekttyp" value="Wohnung"></label>
+      <label>Zimmer <input id="f_zimmer" type="number" step="0.5" value="2.5"></label>
+      <label>Preis (CHF) <input id="f_preis" type="number" value="2200"></label>
+      <label>Kanton <input id="f_kanton" value="Zug"></label>
+      <label>Ort <input id="f_ort" value="Zug"></label>
+      <label>Flaeche m2 <input id="f_flaeche" type="number" value="70"></label>
+      <label>Link (optional) <input id="f_link" value=""></label>
+    </div>
+    <button class="primary" onclick="simulateListing()">Inserat aufschalten</button>
+    <div id="simulateResult"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Alle Inserate</legend>
+    <button onclick="loadImmobilien()">Aktualisieren</button>
+    <table id="immobilienTable"><thead><tr><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </fieldset>
+
+  <fieldset>
+    <legend>Match-Log</legend>
+    <button onclick="loadMatchlog()">Aktualisieren</button>
+    <table id="matchlogTable"><thead><tr><th>Suchprofil</th><th>Immobilie</th><th>Benachrichtigt am</th></tr></thead><tbody></tbody></table>
+  </fieldset>
+</div>
+
+<script>
+function phone() { return document.getElementById('phoneInput').value.trim(); }
+function adminKey() { return localStorage.getItem('admin_key') || ''; }
+
+function saveAdminKey() {
+  localStorage.setItem('admin_key', document.getElementById('adminKeyInput').value.trim());
+  init();
+}
+
+async function authFetch(url, options) {
+  options = options || {};
+  options.headers = Object.assign({}, options.headers, {'X-Admin-Key': adminKey()});
+  return fetch(url, options);
+}
+
+async function loadFirmen() {
+  const res = await authFetch('/api/admin/firmen');
+  const firmen = await res.json();
+  const select = document.getElementById('f_firma');
+  select.innerHTML = '<option value="">(kein Anbieter)</option>';
+  for (const f of firmen) {
+    const opt = document.createElement('option');
+    opt.value = f.id; opt.textContent = f.name + (f.typ === 'privatperson' ? ' (privat)' : '');
+    select.appendChild(opt);
+  }
+}
+
+function td(text) {
+  const cell = document.createElement('td');
+  cell.textContent = text;
+  return cell;
+}
+
+function renderMessages(msgs) {
+  const el = document.getElementById('messages');
+  el.innerHTML = '';
+  for (const m of msgs) {
+    const div = document.createElement('div');
+    div.className = 'bubble ' + (m.role === 'user' ? 'user' : 'bot');
+    div.textContent = m.text;
+    el.appendChild(div);
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+async function loadHistory() {
+  const params = new URLSearchParams({telefonnummer: phone()});
+  const res = await authFetch('/api/chat/history?' + params.toString());
+  renderMessages(await res.json());
+}
+
+async function sendMessage() {
+  const input = document.getElementById('textInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  const res = await authFetch('/api/chat', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({telefonnummer: phone(), text})
+  });
+  renderMessages(await res.json());
+}
+
+async function simulateListing() {
+  const body = {
+    firma_id: document.getElementById('f_firma').value || null,
+    titel: document.getElementById('f_titel').value,
+    objekttyp: document.getElementById('f_objekttyp').value,
+    zimmer: parseFloat(document.getElementById('f_zimmer').value),
+    preis: parseInt(document.getElementById('f_preis').value, 10),
+    kanton: document.getElementById('f_kanton').value,
+    ort: document.getElementById('f_ort').value,
+    flaeche_m2: parseFloat(document.getElementById('f_flaeche').value),
+    link: document.getElementById('f_link').value || null
+  };
+  const res = await authFetch('/api/admin/simulate-listing', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  document.getElementById('simulateResult').textContent =
+    `Inserat "${data.immobilie.titel}" aufgeschaltet. Neue Benachrichtigungen: ${data.neue_matches}`;
+  loadImmobilien();
+  loadMatchlog();
+  loadHistory();
+}
+
+async function loadPending() {
+  // Titel/Ort/Kanton kommen von einem nicht verifizierten WhatsApp-Absender
+  // (siehe docs/produkt-abgleich.md, Sicherheitsabschnitt) - deshalb bewusst
+  // per textContent gerendert statt innerHTML, damit ein boesartiger Titel
+  // (z.B. <script>...) im Admin-Browser nicht ausgefuehrt werden kann.
+  const res = await authFetch('/api/admin/inserate/pruefung');
+  const items = await res.json();
+  const tbody = document.querySelector('#pendingTable tbody');
+  tbody.innerHTML = '';
+  for (const item of items) {
+    const i = item.immobilie;
+    const tr = document.createElement('tr');
+    const titelCell = td(i.titel);
+    if (item.name_konflikt) {
+      titelCell.textContent = '⚠️ ' + i.titel;
+      titelCell.title = 'Achtung: dieser Firmenname existiert bereits unter einer anderen Telefonnummer - moeglicher Identitaetsmissbrauch pruefen!';
+      titelCell.style.color = '#b00020';
+      titelCell.style.fontWeight = 'bold';
+    }
+    tr.appendChild(titelCell);
+    tr.appendChild(td(`${i.ort}, ${i.kanton}`));
+    tr.appendChild(td(i.zimmer));
+    tr.appendChild(td(i.preis));
+    tr.appendChild(td(`${item.firma_name || '-'} (${item.firma_telefonnummer || '-'})`));
+
+    const actions = document.createElement('td');
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'approve';
+    approveBtn.textContent = 'Freigeben';
+    approveBtn.addEventListener('click', () => approveInserat(i.id));
+    const rejectBtn = document.createElement('button');
+    rejectBtn.className = 'reject';
+    rejectBtn.textContent = 'Ablehnen';
+    rejectBtn.addEventListener('click', () => rejectInserat(i.id));
+    actions.appendChild(approveBtn);
+    actions.appendChild(rejectBtn);
+    tr.appendChild(actions);
+
+    tbody.appendChild(tr);
+  }
+}
+
+async function approveInserat(id) {
+  await authFetch(`/api/admin/inserate/${id}/freigeben`, {method: 'POST'});
+  loadPending();
+  loadImmobilien();
+  loadMatchlog();
+}
+
+async function rejectInserat(id) {
+  await authFetch(`/api/admin/inserate/${id}/ablehnen`, {method: 'POST'});
+  loadPending();
+  loadImmobilien();
+}
+
+async function loadImmobilien() {
+  const res = await authFetch('/api/admin/immobilien');
+  const items = await res.json();
+  const tbody = document.querySelector('#immobilienTable tbody');
+  tbody.innerHTML = '';
+  for (const i of items) {
+    const tr = document.createElement('tr');
+    tr.appendChild(td(i.titel));
+    tr.appendChild(td(`${i.ort}, ${i.kanton}`));
+    tr.appendChild(td(i.zimmer));
+    tr.appendChild(td(i.preis));
+    tr.appendChild(td(i.status));
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadMatchlog() {
+  const res = await authFetch('/api/admin/matchlog');
+  const items = await res.json();
+  const tbody = document.querySelector('#matchlogTable tbody');
+  tbody.innerHTML = '';
+  for (const m of items) {
+    const tr = document.createElement('tr');
+    tr.appendChild(td(m.suchprofil_id));
+    tr.appendChild(td(m.immobilie_id));
+    tr.appendChild(td(m.benachrichtigt_am));
+    tbody.appendChild(tr);
+  }
+}
+
+async function init() {
+  document.getElementById('adminKeyInput').value = adminKey();
+  await loadFirmen();
+  loadHistory();
+  loadPending();
+  loadImmobilien();
+  loadMatchlog();
+}
+
+init();
+</script>
+</body>
+</html>
