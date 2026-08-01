@@ -21,7 +21,7 @@ Vermieter-Ablauf (Firma ODER Privatperson, kein Login):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from app.intent_extraction import (
     IntentExtractionConfigError,
@@ -121,6 +121,7 @@ class ChatService:
         dispatcher: NotificationDispatcher,
         lead_repo: Optional[LeadRepository] = None,
         rate_limiter: Optional[RateLimiter] = None,
+        outbound_sender: Optional[Callable[[str, str], None]] = None,
     ):
         self._matching_engine = matching_engine
         self._immobilien_repo = immobilien_repo
@@ -130,6 +131,12 @@ class ChatService:
         self._dispatcher = dispatcher
         self._lead_repo = lead_repo
         self._rate_limiter = rate_limiter or build_default_rate_limiter()
+        # Fuer proaktive Nachrichten (Match-Benachrichtigung, Freigabe-
+        # Bestaetigung), die nicht als direkte Antwort auf eine eingehende
+        # Nachricht entstehen - z.B. ein Aufruf von send_text_message aus
+        # app/meta_whatsapp.py, wenn echtes WhatsApp angebunden ist. Im
+        # simulierten Web-Chat bleibt das None (Frontend pollt die Historie).
+        self._outbound_sender = outbound_sender
         self._sessions: dict[str, Session] = {}
         self._dispatcher.register(self._on_match)
 
@@ -138,19 +145,26 @@ class ChatService:
             self._sessions[telefonnummer] = Session(telefonnummer=telefonnummer)
         return self._sessions[telefonnummer]
 
+    def _send_proactive(self, session: Session, text: str) -> None:
+        session.add_display("bot", text)
+        if self._outbound_sender is not None:
+            self._outbound_sender(session.telefonnummer, text)
+
     def _on_match(self, kunde: Kunde, suchprofil: Suchprofil, immobilie: Immobilie) -> None:
-        session = self._sessions.get(kunde.telefonnummer)
-        if session is None:
-            return
+        # get_session() statt Dict-Lookup: eine Session existiert vielleicht
+        # nicht mehr im Prozess-Speicher (z.B. nach einem Server-Neustart),
+        # aber der Kunde/das Suchabo in der DB sind trotzdem noch aktiv - die
+        # Benachrichtigung darf dadurch nicht stillschweigend verloren gehen.
+        session = self.get_session(kunde.telefonnummer)
         text = (
             f"🔔 Neues Inserat fuer dein Suchabo ({_format_criteria(suchprofil_to_criteria(suchprofil))}): "
             f"{immobilie.titel} | {immobilie.ort}, {immobilie.kanton} | "
             f"{immobilie.zimmer} Zimmer | CHF {immobilie.preis}.- | {immobilie.link}"
         )
-        session.add_display("bot", text)
+        self._send_proactive(session, text)
 
         if self._lead_repo is not None and immobilie.firma_id is not None:
-            session.add_display("bot", "Hast du Interesse an diesem Inserat? (ja/nein)")
+            self._send_proactive(session, "Hast du Interesse an diesem Inserat? (ja/nein)")
             session.pending_lead = PendingLead(
                 immobilie_id=immobilie.id,
                 firma_id=immobilie.firma_id,
@@ -165,11 +179,9 @@ class ChatService:
         firma = self._firma_repo.get_by_id(immobilie.firma_id)
         if firma is None or not firma.telefonnummer:
             return
-        session = self._sessions.get(firma.telefonnummer)
-        if session is None:
-            return
-        session.add_display(
-            "bot", f"✅ Dein Inserat \"{immobilie.titel}\" wurde freigegeben und ist jetzt sichtbar."
+        session = self.get_session(firma.telefonnummer)
+        self._send_proactive(
+            session, f"✅ Dein Inserat \"{immobilie.titel}\" wurde freigegeben und ist jetzt sichtbar."
         )
 
     def handle_message(self, telefonnummer: str, text: str) -> list[str]:

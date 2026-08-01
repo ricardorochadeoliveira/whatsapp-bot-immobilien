@@ -4,13 +4,14 @@ demonstrieren.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -18,7 +19,14 @@ load_dotenv()
 
 from app.bootstrap import context  # noqa: E402  (nach load_dotenv)
 from app.firma_service import FirmaAuthError  # noqa: E402
+from app.meta_whatsapp import (  # noqa: E402
+    parse_incoming_messages,
+    send_text_message,
+    verify_webhook_signature,
+)
 from app.models import Firma, Immobilie, Lead  # noqa: E402
+
+logger = logging.getLogger("immo_bot.webhook")
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -51,6 +59,45 @@ def index():
 @app.get("/firma")
 def firma_portal():
     return FileResponse(str(STATIC_DIR / "firma.html"))
+
+
+# ---------------------------------------------------------------------------
+# Meta WhatsApp Cloud API Webhook (siehe app/meta_whatsapp.py und
+# docs/produkt-abgleich.md). Ersetzt langfristig den simulierten Chat oben.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/webhook/whatsapp")
+def verify_whatsapp_webhook(request: Request):
+    """Meta ruft das beim Einrichten des Webhooks einmalig auf, um den von
+    uns gewaehlten META_WEBHOOK_VERIFY_TOKEN zu bestaetigen."""
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge", "")
+    expected_token = os.environ.get("META_WEBHOOK_VERIFY_TOKEN")
+
+    if mode == "subscribe" and expected_token and token == expected_token:
+        return PlainTextResponse(challenge)
+    raise HTTPException(status_code=403, detail="Webhook-Verifikation fehlgeschlagen.")
+
+
+@app.post("/webhook/whatsapp")
+async def receive_whatsapp_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not verify_webhook_signature(body, signature):
+        raise HTTPException(status_code=401, detail="Ungueltige Signatur.")
+
+    payload = await request.json()
+    for telefonnummer, text in parse_incoming_messages(payload):
+        antworten = context.chat_service.handle_message(telefonnummer, text)
+        for antwort in antworten:
+            try:
+                send_text_message(telefonnummer, antwort)
+            except Exception:
+                logger.exception("Antwort an %s konnte nicht gesendet werden", telefonnummer)
+
+    return {"ok": True}
 
 
 def require_firma_service():

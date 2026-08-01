@@ -331,6 +331,51 @@ getestet und bestaetigt funktionsfaehig.
   ueber SQLAlchemy-ORM (parametrisiert) in die DB gelangen, nirgends per
   String-Interpolation in SQL.
 
+## Deployment + Meta-Anbindung: Entscheidungen (2026-07-30)
+
+**Hosting:** Domain/Website bleiben bei Hostpoint. Hostpoints
+Standard-Webhosting (Shared, PHP/WordPress-orientiert) kann aber keine
+dauerhaft laufende Python-App betreiben - kein Root-Zugriff, kein eigener
+Port. Der Bot-Server laeuft deshalb separat auf **Railway** (git-basiertes
+Deployment, einfach im Kleinen), erreichbar per Subdomain (z.B.
+`bot.eure-domain.ch`), waehrend die eigentliche Website weiter bei
+Hostpoint bleibt. Details: README, Abschnitt "Deployment".
+
+**Meta-Anbindung: direkt statt ueber BSP (Abweichung von Spezifikation
+Abschnitt 4.7).** Die Chef-Spezifikation sah einen Business Solution
+Provider (Twilio/360dialog) vor, um Aufwand zu sparen. Nach Ruecksprache:
+da bereits ein Meta Business Account existiert (der groesste Reibungspunkt
+beim direkten Weg), wird stattdessen direkt gegen die Meta WhatsApp Cloud
+API integriert - guenstiger (kein BSP-Aufschlag auf jede Nachricht) und
+nicht wesentlich aufwaendiger, da Meta selbst die WhatsApp-Infrastruktur
+hostet und nur eine gut dokumentierte REST-API uebrig bleibt.
+`app/meta_whatsapp.py` implementiert Senden, Webhook-Signaturpruefung
+(HMAC-SHA256 mit dem App-Secret, damit niemand gefaelschte Webhook-Aufrufe
+einschleusen kann) und Payload-Parsing. Beide Webhook-Endpunkte
+(`GET`/`POST /webhook/whatsapp`) sind live getestet: lehnen unkonfigurierte
+bzw. falsch signierte Aufrufe korrekt mit 403/401 ab. Noch nicht mit
+echten Meta-Zugangsdaten getestet, da diese noch eingerichtet werden.
+
+> Hinweis: wie schon bei der fruoheren Abweichung (kein oeffentliches
+> Web-Suchportal) gilt auch hier - das ist eine mit Ricardo getroffene
+> Entscheidung, die eigentlich nochmal mit dem Chef abgeglichen werden
+> sollte, da sie von der schriftlichen Spezifikation abweicht.
+
+**Nebenbei entdeckter und behobener Zuverlaessigkeits-Bug:** die
+Match-Benachrichtigung und die Inserat-Freigabe-Bestaetigung suchten bisher
+nach einer bereits im Prozess-Speicher existierenden Chat-Session und gaben
+bei einem Treffer/einer Freigabe **stillschweigend nichts** aus, wenn keine
+Session (mehr) existierte - z.B. nach einem Server-Neustart (was bei jedem
+Railway-Deploy passiert). Das haette bedeutet, dass ein Kunde, der vor
+laengerer Zeit ein Suchabo angelegt hat, bei einem spaeteren Treffer nach
+einem Neustart einfach nie benachrichtigt worden waere, obwohl das Suchabo
+in der Datenbank weiterhin aktiv ist. Behoben: beide Stellen erzeugen jetzt
+bei Bedarf automatisch eine neue Session (`ChatService.get_session()` statt
+direktem Dictionary-Zugriff) - die Benachrichtigung geht immer raus, auch
+nach einem Neustart. Der Rollenwahl-/Gespraechsstatus selbst bleibt aber
+weiterhin nur im Prozess-Speicher (siehe "Noch offen" in
+`docs/launch-checkliste.md`).
+
 ## Offene Punkte fuer Ruecksprache (mit dem Chef, nicht nur intern)
 
 - Genaue Rabatthoehe fuer Gruendungsmitglieder (Spezifikation nennt "z.B.

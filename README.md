@@ -36,6 +36,9 @@ erscheinen.
   fuer Firmen, die lieber ueber eine Weboberflaeche pflegen (mit Login,
   RLS-mandantengetrennt). Inserate von dort sind sofort aktiv (kein
   Pruef-Schritt, da der Login bereits eine staerkere Identitaetspruefung ist).
+- Meta WhatsApp Cloud API angebunden (`app/meta_whatsapp.py`,
+  `POST /webhook/whatsapp`) - Code fertig, wartet auf Meta-App-/Token-Setup
+  und Deployment (siehe "Deployment" unten).
 
 ## Setup
 
@@ -108,15 +111,74 @@ pytest
 Die Intent-Extraktion selbst (`app/intent_extraction.py`) laesst sich direkt
 gegen die echte Claude-API testen, z.B. interaktiv im Web-Chat.
 
+## Deployment (Railway) + Meta WhatsApp anbinden
+
+Domain/Website kann bei Hostpoint bleiben - Hostpoints Standard-Webhosting
+kann aber keine dauerhaft laufende Python-App betreiben (kein Root-/
+Port-Zugriff). Der Bot-Server laeuft deshalb separat auf Railway, erreichbar
+z.B. ueber eine Subdomain wie `bot.eure-domain.ch` (DNS-Eintrag zeigt auf
+Railway statt Hostpoint).
+
+### 1. Railway einrichten
+
+1. Auf [railway.app](https://railway.app) Account erstellen/einloggen.
+2. Neues Projekt -> "Deploy from GitHub repo" (Repo muss dafuer auf GitHub
+   liegen - lokal ist bereits ein Git-Repo vorbereitet, `git push` zu einem
+   neuen GitHub-Repo erledigt das).
+3. Railway erkennt Python automatisch (via `requirements.txt` + `Procfile`).
+4. Unter "Variables" alle Werte aus eurer lokalen `.env` eintragen (gleiche
+   Namen, gleiche Werte - `.env` selbst wird nie hochgeladen, ist in
+   `.gitignore`).
+5. Nach dem ersten Deploy zeigt Railway eine URL wie
+   `https://<projekt>.up.railway.app` - die als Webhook-Ziel nutzen (siehe
+   unten), optional spaeter durch eine eigene Subdomain ersetzen (Railway
+   "Settings -> Domains -> Custom Domain", DNS-CNAME beim Domain-Anbieter
+   setzen).
+
+### 2. Meta WhatsApp Cloud API einrichten
+
+1. [developers.facebook.com](https://developers.facebook.com) -> App
+   erstellen (Typ "Business"), verknuepft mit eurem bestehenden Meta
+   Business Account.
+2. Produkt **WhatsApp** zur App hinzufuegen.
+3. Unter WhatsApp -> API Setup: Test-Telefonnummer (kostenlos, zum Start
+   ausreichend) oder eigene Nummer verifizieren.
+4. Dort findet ihr **Phone Number ID** und einen temporaeren Access Token
+   (24h gueltig - fuer den Dauerbetrieb spaeter ueber Business Settings ->
+   System Users einen permanenten Token erzeugen).
+5. Unter App-Einstellungen -> Grundlegendes: **App-Geheimnis** (App Secret)
+   kopieren.
+6. Diese vier Werte in Railways "Variables" eintragen:
+   `META_ACCESS_TOKEN`, `META_PHONE_NUMBER_ID`, `META_APP_SECRET` und einen
+   selbst ausgedachten `META_WEBHOOK_VERIFY_TOKEN` (beliebiger String).
+7. Unter WhatsApp -> Configuration -> Webhook: **Callback URL** =
+   `https://<eure-railway-url>/webhook/whatsapp`, **Verify Token** = derselbe
+   Wert wie `META_WEBHOOK_VERIFY_TOKEN`. Meta ruft die URL testweise auf -
+   bei Erfolg ("Verified") ist die Verbindung hergestellt.
+8. Webhook-Feld **messages** abonnieren.
+9. Test: der Test-Nummer per WhatsApp schreiben - die Nachricht sollte im
+   Bot ankommen und eine Antwort zurueckkommen.
+
+**Wichtig fuer proaktive Benachrichtigungen** (🔔 Match-Meldungen,
+Freigabe-Bestaetigungen): Meta erlaubt freien Text nur innerhalb 24h nach
+der letzten Nachricht des Nutzers. Ausserhalb davon braucht es ein bei Meta
+zur Genehmigung eingereichtes Message-Template (dauert typischerweise
+Stunden bis Tage) - siehe `docs/launch-checkliste.md`. Bis dahin schlagen
+solche Sendungen ausserhalb des 24h-Fensters fehl (wird geloggt, bringt die
+App aber nicht zum Absturz).
+
 ## Naechste Schritte
 
 Siehe `docs/launch-checkliste.md` fuer die vollstaendige Liste. Kurzfassung:
 
 - Admin-Panel zu echter Inserate-Verwaltung ausbauen (Bearbeiten, nicht nur
   Freigeben/Ablehnen).
-- Hosting fuer die FastAPI-App selbst klaeren (Supabase liefert nur die DB).
-- Echte WhatsApp-Anbindung (WhatsApp Business API ueber Twilio/360dialog)
-  anstelle von `web/` als Frontend fuer `app/chat_service.py`.
+- Auf Railway deployen + Meta-Webhook verbinden (siehe "Deployment" oben) -
+  Code ist fertig, fehlt nur noch die tatsaechliche Einrichtung.
+- Permanenten Meta-Access-Token einrichten (System User in Business
+  Settings) statt dem 24h-Test-Token.
+- Message-Template bei Meta zur Genehmigung einreichen fuer proaktive
+  Benachrichtigungen ausserhalb des 24h-Fensters.
 - Zusaetzlicher Verifizierungsschritt fuer WhatsApp-Vermieter erwaegen
   (aktuell nur Telefonnummer + manuelle Admin-Pruefung).
 - Falls spaeter eine Immobilienfirma mit eigenem CRM/Feed andocken will:

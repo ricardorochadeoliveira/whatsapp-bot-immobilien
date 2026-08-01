@@ -7,12 +7,28 @@ Matching-Engine, Matching-Job und Chat-Service kennen den Unterschied nicht.
 """
 from __future__ import annotations
 
+import logging
+
 from app.chat_service import ChatService
 from app.db import get_database_url, get_engine, get_runtime_database_url, get_session_factory
 from app.firma_service import FirmaService
 from app.matching import MatchingEngine
 from app.matching_job import MatchingJob
+from app.meta_whatsapp import is_configured as meta_whatsapp_configured
+from app.meta_whatsapp import send_text_message
 from app.notifications import NotificationDispatcher
+
+logger = logging.getLogger("immo_bot.bootstrap")
+
+
+def _meta_outbound_sender(to: str, text: str) -> None:
+    """Wrapper um send_text_message: Fehler (z.B. 24h-Fenster abgelaufen,
+    Meta-API nicht erreichbar) duerfen proaktive Benachrichtigungen nicht
+    zum Absturz bringen - nur loggen und weitermachen."""
+    try:
+        send_text_message(to, text)
+    except Exception:
+        logger.exception("WhatsApp-Versand an %s fehlgeschlagen", to)
 from app.repository import (
     FirmaRepository,
     ImmobilienRepository,
@@ -146,6 +162,7 @@ class AppContext:
             suchprofil_repo=self.suchprofil_repo,
             dispatcher=self.dispatcher,
             lead_repo=self.lead_repo,
+            outbound_sender=_meta_outbound_sender if meta_whatsapp_configured() else None,
         )
 
 

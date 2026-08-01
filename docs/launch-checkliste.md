@@ -91,28 +91,58 @@ sortiert, sondern nach Bereich. Bei Erledigung bitte abhaken.
 
 ## Hosting
 
-- [ ] Supabase liefert nur die Datenbank, nicht das Hosting fuer die
-      FastAPI-App selbst. Hosting-Entscheidung noch offen (z.B. Railway,
-      Render, Fly.io, eigener VPS).
-- [ ] Die App braucht eine oeffentlich erreichbare HTTPS-URL, sobald WhatsApp
-      angebunden wird (Meta ruft den Webhook nur auf einer echten,
-      erreichbaren Adresse auf - kein localhost).
+- [x] **Entscheidung getroffen (2026-07-30): Railway fuer den Bot-Server.**
+      Domain/Website bleiben bei Hostpoint (Standard-Webhosting - kann keine
+      dauerhaft laufende Python-App betreiben, kein Root-/Port-Zugriff).
+      Bot-Server laeuft separat auf Railway, per Subdomain verbunden. Siehe
+      README, Abschnitt "Deployment".
+- [ ] **Noch nicht ausgefuehrt:** Railway-Projekt tatsaechlich anlegen,
+      GitHub-Repo verbinden, Env-Variablen eintragen, deployen.
+- [ ] Custom-Domain/Subdomain bei Railway einrichten (bis dahin die von
+      Railway vergebene `*.up.railway.app`-URL nutzen).
 
 ## WhatsApp / Meta
 
-- [ ] WhatsApp Business Platform ueber Business Solution Provider (Twilio,
-      360dialog o.ae.) anbinden statt direkt gegen die rohe Meta-API (siehe
-      Chef-Spezifikation, Abschnitt 4.7).
+- [x] **Entscheidung getroffen (2026-07-30): direkt gegen die Meta Cloud
+      API**, nicht ueber einen Business Solution Provider wie in der
+      urspruenglichen Chef-Spezifikation (Abschnitt 4.7) vorgesehen -
+      Begruendung: Meta Business Account war bereits vorhanden (Hauptaufwand
+      damit erledigt), direkte Anbindung ist guenstiger (kein BSP-Aufschlag)
+      und nicht wesentlich komplexer. Siehe `docs/produkt-abgleich.md` fuer
+      Details - sollte ggf. nochmal mit dem Chef abgeglichen werden, da es
+      von der schriftlichen Spezifikation abweicht.
+- [x] **Code fertig (2026-07-30):** `app/meta_whatsapp.py` (Senden,
+      Signaturpruefung, Payload-Parsing), `GET/POST /webhook/whatsapp` in
+      `web/main.py`, `ChatService.outbound_sender`-Hook fuer proaktive
+      Nachrichten (🔔 Matches, Freigabe-Bestaetigungen). Beide Endpunkte
+      live getestet: lehnen unkonfigurierte/gefaelschte Aufrufe korrekt ab
+      (403 bzw. 401). Noch nicht mit echten Meta-Zugangsdaten getestet.
+- [ ] **Naechste konkrete Schritte (siehe README "Deployment"):** Meta App
+      erstellen, WhatsApp-Produkt hinzufuegen, Test-Nummer einrichten,
+      Access Token + Phone Number ID + App Secret besorgen, Webhook mit der
+      Railway-URL verbinden, Testnachricht senden.
 - [ ] **Message-Template zur Genehmigung bei Meta einreichen** fuer die
       proaktiven "neues Inserat gefunden"-Benachrichtigungen (Punkt 5) - Meta
       erlaubt freien Text nur innerhalb 24h nach der letzten Kundennachricht,
       ausserhalb davon braucht es ein genehmigtes Template. Genehmigung
       dauert typischerweise Stunden bis wenige Tage - rechtzeitig einreichen.
+      Bis dahin schlagen solche Sendungen ausserhalb des 24h-Fensters fehl
+      (wird geloggt, App stuerzt nicht ab).
 - [ ] Business-Verifizierung bei Meta fuer eigene Nummer + hoehere
       Nachrichtenlimits (statt Test-Nummer).
+- [ ] Permanenten Access Token einrichten (System User in Business Settings)
+      statt des 24h-Test-Tokens.
 - [ ] Opt-in/Opt-out-Pflicht beachten (siehe Chef-Spezifikation 4.7): Nutzer
       muessen zuerst selbst schreiben, "STOP" muss das gespeicherte Profil
-      vollstaendig loeschen. Datenschutzerklaerung noetig.
+      vollstaendig loeschen (noch nicht implementiert). Datenschutzerklaerung
+      noetig.
+- [ ] Konversations-Status (Rollenwahl Vermieter/Mieter, offene
+      Rueckfragen) lebt nur im Prozess-Speicher, nicht in der DB. Nach einem
+      Server-Neustart (z.B. bei jedem Railway-Deploy) muss ein Nutzer die
+      Rollenwahl neu durchlaufen - Suchabos/Inserate/Leads in der DB gehen
+      dabei NICHT verloren (Match-Benachrichtigungen funktionieren weiter,
+      das wurde extra so gebaut). Fuer nahtlose Fortsetzung mitten in einem
+      Gespraech muesste der Session-State in die DB verlagert werden.
 
 ## Offene Geschaeftsentscheidungen (mit dem Chef klaeren, nicht selbst entscheiden)
 
