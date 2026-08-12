@@ -204,6 +204,32 @@ class ChatService:
             session.add_display("bot", antwort)
             return [antwort]
 
+        if session.role is not None:
+            antwort = text.strip().lower()
+            neue_rolle = None
+            if antwort in VERMIETER_WOERTER and session.role != "vermieter":
+                neue_rolle = "vermieter"
+            elif antwort in MIETER_WOERTER and session.role != "mieter":
+                neue_rolle = "mieter"
+            if neue_rolle is not None:
+                session.reset()
+                session.role = neue_rolle
+                session.role_frage_gestellt = True
+                if neue_rolle == "vermieter":
+                    antwort_text = (
+                        "Alles klar, du bist jetzt als Vermieter unterwegs! Bist du "
+                        "eine Firma oder Privatperson? Antworte mit 'Firma' oder "
+                        "'Privatperson'."
+                    )
+                else:
+                    antwort_text = (
+                        "Alles klar, du bist jetzt als Mieter unterwegs! Beschreib "
+                        "mir einfach, was du suchst (z.B. '2.5-Zimmer-Wohnung in "
+                        "Zug, max 2000.-')."
+                    )
+                session.add_display("bot", antwort_text)
+                return [antwort_text]
+
         if session.pending_lead is not None:
             antwort = self._handle_pending_lead(session, text)
             session.add_display("bot", antwort)

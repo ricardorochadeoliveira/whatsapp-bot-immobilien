@@ -68,6 +68,22 @@ def test_role_frage_kommt_zuerst():
     ]
 
 
+def test_rollenwechsel_mitten_im_gespraech():
+    service, *_ = make_service()
+    phone = "+41790000098"
+    _als_mieter(service, phone)
+
+    antwort = service.handle_message(phone, "Vermieter")
+    assert "Firma" in antwort[0] and "Privatperson" in antwort[0]
+
+    session = service.get_session(phone)
+    assert session.role == "vermieter"
+
+    zurueck = service.handle_message(phone, "Mieter")
+    assert "beschreib" in zurueck[0].lower()
+    assert service.get_session(phone).role == "mieter"
+
+
 def test_clarifying_question_when_intent_incomplete():
     service, *_ = make_service()
     _als_mieter(service, "+41790000000")
