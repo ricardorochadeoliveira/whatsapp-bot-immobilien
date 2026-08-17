@@ -35,7 +35,7 @@ def make_immobilie(**overrides):
         preis=2000,
         objekttyp="Wohnung",
         flaeche_m2=60,
-        bild_url="https://example.com/img.png",
+        bilder=["https://example.com/img.png"],
         link="https://example.com/inserate/1",
     )
     defaults.update(overrides)

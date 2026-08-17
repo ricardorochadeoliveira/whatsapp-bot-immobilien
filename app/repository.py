@@ -52,6 +52,9 @@ class ImmobilienRepository(ABC):
     @abstractmethod
     def set_status(self, immobilie_id: str, status: str) -> None: ...
 
+    @abstractmethod
+    def set_bilder(self, immobilie_id: str, bilder: list[str]) -> None: ...
+
 
 class KundenRepository(ABC):
     @abstractmethod
@@ -152,6 +155,10 @@ class InMemoryImmobilienRepository(ImmobilienRepository):
     def set_status(self, immobilie_id: str, status: str) -> None:
         if immobilie_id in self._items:
             self._items[immobilie_id] = self._items[immobilie_id].model_copy(update={"status": status})
+
+    def set_bilder(self, immobilie_id: str, bilder: list[str]) -> None:
+        if immobilie_id in self._items:
+            self._items[immobilie_id] = self._items[immobilie_id].model_copy(update={"bilder": bilder})
 
 
 class InMemoryKundenRepository(KundenRepository):

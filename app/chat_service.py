@@ -122,6 +122,7 @@ class ChatService:
         lead_repo: Optional[LeadRepository] = None,
         rate_limiter: Optional[RateLimiter] = None,
         outbound_sender: Optional[Callable[[str, str], None]] = None,
+        image_sender: Optional[Callable[[str, str, Optional[str]], None]] = None,
     ):
         self._matching_engine = matching_engine
         self._immobilien_repo = immobilien_repo
@@ -137,6 +138,10 @@ class ChatService:
         # app/meta_whatsapp.py, wenn echtes WhatsApp angebunden ist. Im
         # simulierten Web-Chat bleibt das None (Frontend pollt die Historie).
         self._outbound_sender = outbound_sender
+        # Fuer echte Foto-Nachrichten via WhatsApp (Match-Benachrichtigung,
+        # bester Suchtreffer) - analog outbound_sender, None im simulierten
+        # Web-Chat.
+        self._image_sender = image_sender
         self._sessions: dict[str, Session] = {}
         self._dispatcher.register(self._on_match)
 
@@ -150,6 +155,12 @@ class ChatService:
         if self._outbound_sender is not None:
             self._outbound_sender(session.telefonnummer, text)
 
+    def _send_proactive_image(self, session: Session, image_url: str, caption: str) -> None:
+        # Web-Chat-Simulator ist reiner Text - Bild-URL als anklickbare Zeile.
+        session.add_display("bot", f"[Bild] {caption} {image_url}")
+        if self._image_sender is not None:
+            self._image_sender(session.telefonnummer, image_url, caption)
+
     def _on_match(self, kunde: Kunde, suchprofil: Suchprofil, immobilie: Immobilie) -> None:
         # get_session() statt Dict-Lookup: eine Session existiert vielleicht
         # nicht mehr im Prozess-Speicher (z.B. nach einem Server-Neustart),
@@ -162,6 +173,8 @@ class ChatService:
             f"{immobilie.zimmer} Zimmer | CHF {immobilie.preis}.- | {immobilie.link}"
         )
         self._send_proactive(session, text)
+        if immobilie.bilder:
+            self._send_proactive_image(session, immobilie.bilder[0], immobilie.titel)
 
         if self._lead_repo is not None and immobilie.firma_id is not None:
             self._send_proactive(session, "Hast du Interesse an diesem Inserat? (ja/nein)")
@@ -336,7 +349,7 @@ class ChatService:
             flaeche_m2=listing.living_space_m2,
             hat_garten=listing.has_garden,
             status="in_pruefung",
-            bild_url="https://picsum.photos/400/300",
+            bilder=[],
             link="https://example.com/inserate/neu",
         )
         self._immobilien_repo.add(immobilie)
@@ -395,6 +408,8 @@ class ChatService:
 
         for nachricht in (treffer_text, rueckfrage):
             session.add_display("bot", nachricht)
+        if treffer and treffer[0].bilder:
+            self._send_proactive_image(session, treffer[0].bilder[0], treffer[0].titel)
         return [treffer_text, rueckfrage]
 
     def _handle_pending_confirmation(self, session: Session, text: str) -> str:

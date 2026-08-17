@@ -92,7 +92,7 @@ def _immobilie_from_orm(row: ImmobilieORM) -> Immobilie:
         flaeche_m2=row.flaeche_m2,
         hat_garten=row.hat_garten,
         status=row.status,
-        bild_url=row.bild_url,
+        bilder=row.bilder or [],
         link=row.link,
         inseriert_am=row.inseriert_am,
     )
@@ -204,6 +204,13 @@ class SupabaseImmobilienRepository(ImmobilienRepository):
             row = session.get(ImmobilieORM, immobilie_id)
             if row is not None:
                 row.status = status
+                session.commit()
+
+    def set_bilder(self, immobilie_id: str, bilder: list[str]) -> None:
+        with self._session_factory() as session:
+            row = session.get(ImmobilieORM, immobilie_id)
+            if row is not None:
+                row.bilder = bilder
                 session.commit()
 
 

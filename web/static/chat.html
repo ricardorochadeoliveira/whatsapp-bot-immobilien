@@ -36,6 +36,9 @@
   .admin-panel button.primary { margin-top: 10px; padding: 8px 14px; border: none; border-radius: 6px; background: #075e54; color: #fff; cursor: pointer; }
   .admin-panel button.approve { padding: 4px 10px; border: none; border-radius: 4px; background: #3e5c4e; color: #fff; cursor: pointer; }
   .admin-panel button.reject { padding: 4px 10px; border: none; border-radius: 4px; background: #b00020; color: #fff; cursor: pointer; margin-left: 4px; }
+  .admin-panel button.secondary { padding: 4px 10px; border: none; border-radius: 4px; background: #888; color: #fff; cursor: pointer; }
+  .thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; display: block; background: #eee; }
+  .thumb-placeholder { width: 48px; height: 36px; border-radius: 4px; background: #e5e5e5; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #eee; }
   #simulateResult { margin-top: 8px; font-size: 13px; color: #075e54; white-space: pre-wrap; }
@@ -70,7 +73,7 @@
   <div class="hint">Inserate, die Vermieter per WhatsApp eingereicht haben - erst nach Freigabe fuer Mieter sichtbar.</div>
   <fieldset>
     <button onclick="loadPending()">Aktualisieren</button>
-    <table id="pendingTable"><thead><tr><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Anbieter</th><th></th></tr></thead><tbody></tbody></table>
+    <table id="pendingTable"><thead><tr><th>Bild</th><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Anbieter</th><th></th><th></th></tr></thead><tbody></tbody></table>
   </fieldset>
 
   <h2>Admin: Testinserat direkt aktiv anlegen</h2>
@@ -94,7 +97,7 @@
   <fieldset>
     <legend>Alle Inserate</legend>
     <button onclick="loadImmobilien()">Aktualisieren</button>
-    <table id="immobilienTable"><thead><tr><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <table id="immobilienTable"><thead><tr><th>Bild</th><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th></tr></thead><tbody></tbody></table>
   </fieldset>
 
   <fieldset>
@@ -205,6 +208,9 @@ async function loadPending() {
   for (const item of items) {
     const i = item.immobilie;
     const tr = document.createElement('tr');
+
+    tr.appendChild(thumbCell(i));
+
     const titelCell = td(i.titel);
     if (item.name_konflikt) {
       titelCell.textContent = '⚠️ ' + i.titel;
@@ -231,8 +237,55 @@ async function loadPending() {
     actions.appendChild(rejectBtn);
     tr.appendChild(actions);
 
+    tr.appendChild(bilderUploadCell(i.id, loadPending));
+
     tbody.appendChild(tr);
   }
+}
+
+function thumbCell(i) {
+  const cell = document.createElement('td');
+  if (i.bilder && i.bilder.length > 0) {
+    const img = document.createElement('img');
+    img.className = 'thumb';
+    img.src = i.bilder[0];
+    img.alt = i.titel;
+    cell.appendChild(img);
+  } else {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thumb-placeholder';
+    cell.appendChild(placeholder);
+  }
+  return cell;
+}
+
+function bilderUploadCell(immobilieId, onDone) {
+  const cell = document.createElement('td');
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.multiple = true;
+  fileInput.accept = 'image/jpeg,image/png,image/webp';
+  fileInput.style.display = 'none';
+  fileInput.addEventListener('change', async () => {
+    if (fileInput.files.length === 0) return;
+    const formData = new FormData();
+    for (const file of fileInput.files) formData.append('files', file);
+    const res = await authFetch(`/api/admin/inserate/${immobilieId}/bilder`, {
+      method: 'POST', body: formData
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.detail || 'Fehler beim Bild-Upload.');
+    }
+    onDone();
+  });
+  const addBtn = document.createElement('button');
+  addBtn.className = 'secondary';
+  addBtn.textContent = 'Bilder +';
+  addBtn.addEventListener('click', () => fileInput.click());
+  cell.appendChild(addBtn);
+  cell.appendChild(fileInput);
+  return cell;
 }
 
 async function approveInserat(id) {
@@ -255,6 +308,7 @@ async function loadImmobilien() {
   tbody.innerHTML = '';
   for (const i of items) {
     const tr = document.createElement('tr');
+    tr.appendChild(thumbCell(i));
     tr.appendChild(td(i.titel));
     tr.appendChild(td(`${i.ort}, ${i.kanton}`));
     tr.appendChild(td(i.zimmer));

@@ -77,7 +77,7 @@ class ImmobilieORM(Base):
     flaeche_m2: Mapped[float] = mapped_column(Float, nullable=False)
     hat_garten: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="aktiv", nullable=False)
-    bild_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    bilder: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     link: Mapped[str] = mapped_column(String(512), nullable=False)
     inseriert_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

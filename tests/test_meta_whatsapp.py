@@ -1,7 +1,15 @@
 import hashlib
 import hmac
 
-from app.meta_whatsapp import parse_incoming_messages, verify_webhook_signature
+import httpx
+import pytest
+
+from app.meta_whatsapp import (
+    MetaWhatsAppSendError,
+    parse_incoming_messages,
+    send_image_message,
+    verify_webhook_signature,
+)
 
 
 def test_verify_webhook_signature_accepts_correct_signature(monkeypatch):
@@ -75,3 +83,40 @@ def test_parse_incoming_messages_ignores_non_text_and_status_updates():
 
 def test_parse_incoming_messages_handles_empty_payload():
     assert parse_incoming_messages({}) == []
+
+
+def test_send_image_message_posts_correct_payload(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "test-token")
+    monkeypatch.setenv("META_PHONE_NUMBER_ID", "12345")
+
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        return httpx.Response(200, json={"messages": [{"id": "wamid.abc"}]}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    send_image_message("+41791234567", "https://example.com/bild.jpg", "Schoene Wohnung")
+
+    assert "12345" in captured["url"]
+    assert captured["headers"]["Authorization"] == "Bearer test-token"
+    assert captured["json"]["to"] == "41791234567"
+    assert captured["json"]["type"] == "image"
+    assert captured["json"]["image"] == {"link": "https://example.com/bild.jpg", "caption": "Schoene Wohnung"}
+
+
+def test_send_image_message_raises_on_http_error(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "test-token")
+    monkeypatch.setenv("META_PHONE_NUMBER_ID", "12345")
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        request = httpx.Request("POST", url)
+        return httpx.Response(400, json={"error": "bad"}, request=request)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    with pytest.raises(MetaWhatsAppSendError):
+        send_image_message("+41791234567", "https://example.com/bild.jpg")

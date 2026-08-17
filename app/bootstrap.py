@@ -15,8 +15,9 @@ from app.firma_service import FirmaService
 from app.matching import MatchingEngine
 from app.matching_job import MatchingJob
 from app.meta_whatsapp import is_configured as meta_whatsapp_configured
-from app.meta_whatsapp import send_text_message
+from app.meta_whatsapp import send_image_message, send_text_message
 from app.notifications import NotificationDispatcher
+from app.rate_limiter import RateLimiter
 
 logger = logging.getLogger("immo_bot.bootstrap")
 
@@ -29,6 +30,15 @@ def _meta_outbound_sender(to: str, text: str) -> None:
         send_text_message(to, text)
     except Exception:
         logger.exception("WhatsApp-Versand an %s fehlgeschlagen", to)
+
+
+def _meta_image_sender(to: str, image_url: str, caption: str | None) -> None:
+    """Wrapper um send_image_message - gleiches Fehlerverhalten wie
+    _meta_outbound_sender."""
+    try:
+        send_image_message(to, image_url, caption)
+    except Exception:
+        logger.exception("WhatsApp-Bildversand an %s fehlgeschlagen", to)
 from app.repository import (
     FirmaRepository,
     ImmobilienRepository,
@@ -145,6 +155,13 @@ class AppContext:
         # funktioniert unabhaengig davon.
         self.firma_service = FirmaService(self.firma_repo) if get_runtime_database_url() else None
 
+        # Schutz gegen Brute-Force auf Login/Signup - eigene, strengere
+        # Instanz als der Chat-Rate-Limiter (Key hier ist "email|ip" statt
+        # Telefonnummer, die Klasse ist generisch genug dafuer).
+        self.auth_rate_limiter = RateLimiter(
+            per_phone_per_minute=5, per_phone_per_day=50, global_per_minute=30
+        )
+
         self.matching_engine = MatchingEngine(self.immobilien_repo)
         self.dispatcher = NotificationDispatcher()
         self.matching_job = MatchingJob(
@@ -163,6 +180,7 @@ class AppContext:
             dispatcher=self.dispatcher,
             lead_repo=self.lead_repo,
             outbound_sender=_meta_outbound_sender if meta_whatsapp_configured() else None,
+            image_sender=_meta_image_sender if meta_whatsapp_configured() else None,
         )
 
 

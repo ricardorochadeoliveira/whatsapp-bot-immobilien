@@ -27,3 +27,13 @@ def test_per_phone_daily_limit():
     assert limiter.allow("+41790000001") is True
     assert limiter.allow("+41790000001") is True
     assert limiter.allow("+41790000001") is False
+
+
+def test_auth_rate_limit_config_blocks_after_five_attempts_per_key():
+    """Gleiche Werte wie app/bootstrap.py's auth_rate_limiter - Schutz gegen
+    Brute-Force auf /api/firma/login und /api/firma/signup."""
+    limiter = RateLimiter(per_phone_per_minute=5, per_phone_per_day=50, global_per_minute=30)
+    key = "test@example.com|127.0.0.1"
+    for _ in range(5):
+        assert limiter.allow(key) is True
+    assert limiter.allow(key) is False

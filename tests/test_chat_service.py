@@ -4,7 +4,7 @@ extract_intent/extract_listing werden gemockt, damit der komplette Ablauf
 (Rollenwahl, Mieter-Suche, Vermieter-Inserat) deterministisch und ohne
 API-Key durchgespielt werden kann.
 """
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app import chat_service as chat_service_module
 from app.chat_service import ChatService
@@ -23,7 +23,7 @@ from app.repository import (
 from app.seed_data import build_seed_immobilien
 
 
-def make_service(rate_limiter=None):
+def make_service(rate_limiter=None, image_sender=None):
     immobilien_repo = InMemoryImmobilienRepository(seed=build_seed_immobilien())
     firma_repo = InMemoryFirmaRepository()
     kunden_repo = InMemoryKundenRepository()
@@ -39,6 +39,7 @@ def make_service(rate_limiter=None):
         suchprofil_repo=suchprofil_repo,
         dispatcher=dispatcher,
         lead_repo=lead_repo,
+        image_sender=image_sender,
     )
     return service, suchprofil_repo, immobilien_repo, firma_repo, lead_repo
 
@@ -115,6 +116,24 @@ def test_full_flow_creates_suchprofil_on_yes():
     )
     assert len(profile) == 1
     assert profile[0].kanton == "Zug"
+
+
+def test_suchtreffer_mit_bild_wird_als_foto_versendet():
+    image_sender = MagicMock()
+    service, *_ = make_service(image_sender=image_sender)
+    _als_mieter(service, "+41790000020")
+    criteria = SearchCriteria(rooms=2.5, canton="Zug", max_price=2200, property_type="Wohnung")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        service.handle_message("+41790000020", "2.5-Zimmer-Wohnung in Zug, max 2200.-")
+
+    image_sender.assert_called_once_with(
+        "+41790000020",
+        "https://picsum.photos/seed/1/800/600",
+        "Helle 2.5-Zimmer-Wohnung mit Balkon",
+    )
 
 
 def test_full_flow_no_suchprofil_on_no():

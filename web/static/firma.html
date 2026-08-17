@@ -29,6 +29,13 @@
   .checkbox-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
   .checkbox-row input { width: auto; margin-top: 0; }
   .topbar { display: flex; justify-content: space-between; align-items: center; }
+  .thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; display: block; background: #eee; }
+  .thumb-placeholder { width: 48px; height: 36px; border-radius: 4px; background: #e5e5e5; }
+  .hint { font-size: 12px; color: #777; margin-top: 4px; }
+  #mfaLoginStep { display: none; }
+  #mfaEnrollDetails { display: none; margin-top: 10px; }
+  #mfaEnrollDetails img { display: block; margin-top: 8px; width: 180px; height: 180px; }
+  .mfa-active { color: #3e5c4e; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -38,10 +45,30 @@
   <div id="authForms">
     <div class="card">
       <h2>Login</h2>
-      <label>E-Mail <input id="login_email" type="email"></label>
-      <label>Passwort <input id="login_password" type="password"></label>
-      <button onclick="login()">Einloggen</button>
+      <div id="loginStep">
+        <label>E-Mail <input id="login_email" type="email"></label>
+        <label>Passwort <input id="login_password" type="password"></label>
+        <button onclick="login()">Einloggen</button>
+      </div>
+      <div id="mfaLoginStep">
+        <label>6-stelliger Code aus der Authenticator-App <input id="mfa_login_code" inputmode="numeric" maxlength="6"></label>
+        <button onclick="submitMfaLogin()">Bestätigen</button>
+      </div>
       <div id="loginError" class="error"></div>
+      <div id="loginInfo" class="info"></div>
+      <button class="secondary" onclick="toggleForgotPassword()">Passwort vergessen?</button>
+      <div id="forgotPasswordStep" style="display:none">
+        <label>E-Mail <input id="forgot_email" type="email"></label>
+        <button onclick="requestPasswordReset()">Link zum Zuruecksetzen senden</button>
+      </div>
+    </div>
+
+    <div id="resetPasswordCard" class="card" style="display:none">
+      <h2>Neues Passwort setzen</h2>
+      <label>Neues Passwort <input id="reset_password" type="password"></label>
+      <div class="hint">Mindestens 8 Zeichen, mit Buchstabe und Ziffer.</div>
+      <button onclick="submitPasswordReset()">Passwort setzen</button>
+      <div id="resetError" class="error"></div>
     </div>
 
     <div class="card">
@@ -49,6 +76,7 @@
       <label>Firmenname <input id="signup_name"></label>
       <label>E-Mail <input id="signup_email" type="email"></label>
       <label>Passwort <input id="signup_password" type="password"></label>
+      <div class="hint">Mindestens 8 Zeichen, mit Buchstabe und Ziffer.</div>
       <button onclick="signup()">Firma registrieren</button>
       <div id="signupError" class="error"></div>
       <div id="signupInfo" class="info"></div>
@@ -59,6 +87,19 @@
     <div class="card topbar">
       <div>Eingeloggt als <strong id="firmaName"></strong></div>
       <button class="secondary" onclick="logout()">Logout</button>
+    </div>
+
+    <div class="card">
+      <h2>Sicherheit</h2>
+      <div id="mfaStatus">Zwei-Faktor-Authentifizierung: <span id="mfaStatusText">wird geladen…</span></div>
+      <button id="mfaEnrollBtn" class="secondary" onclick="startMfaEnroll()">Zwei-Faktor-Authentifizierung aktivieren</button>
+      <div id="mfaEnrollDetails">
+        <div class="hint">QR-Code mit einer Authenticator-App (z.B. Google Authenticator) scannen, oder den Code manuell eintragen: <strong id="mfaSecret"></strong></div>
+        <img id="mfaQrCode" alt="QR-Code für 2FA">
+        <label>6-stelliger Code aus der App <input id="mfa_activate_code" inputmode="numeric" maxlength="6"></label>
+        <button onclick="activateMfa()">Aktivieren</button>
+      </div>
+      <div id="mfaError" class="error"></div>
     </div>
 
     <div class="card">
@@ -81,6 +122,7 @@
       </div>
       <label>Beschreibung <textarea id="f_beschreibung" rows="2"></textarea></label>
       <div class="checkbox-row"><input id="f_garten" type="checkbox"><label style="margin:0">Garten vorhanden</label></div>
+      <label>Bilder (mehrere möglich, max. 6) <input id="f_bilder" type="file" multiple accept="image/jpeg,image/png,image/webp"></label>
       <button onclick="createInserat()">Inserat einstellen</button>
       <div id="inseratError" class="error"></div>
     </div>
@@ -89,7 +131,7 @@
       <h2>Meine Inserate</h2>
       <button onclick="loadInserate()">Aktualisieren</button>
       <table id="inserateTable">
-        <thead><tr><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Bild</th><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th><th></th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -106,7 +148,46 @@
 </div>
 
 <script>
-function token() { return localStorage.getItem('firma_token'); }
+// Session-Token liegt in einem httpOnly-Cookie (vom Server gesetzt) - fuer
+// JS nicht lesbar und damit nicht per XSS stehlbar. Kein localStorage mehr.
+let pendingMfaToken = null;
+let pendingMfaFactorId = null;
+let recoveryToken = null;
+
+function toggleForgotPassword() {
+  const step = document.getElementById('forgotPasswordStep');
+  step.style.display = step.style.display === 'none' ? 'block' : 'none';
+}
+
+async function requestPasswordReset() {
+  const email = document.getElementById('forgot_email').value;
+  const infoEl = document.getElementById('loginInfo');
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = ''; infoEl.textContent = '';
+  const res = await fetch('/api/firma/password/forgot', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Anfordern.'; return; }
+  infoEl.textContent = data.detail;
+  document.getElementById('forgotPasswordStep').style.display = 'none';
+}
+
+async function submitPasswordReset() {
+  const newPassword = document.getElementById('reset_password').value;
+  const errEl = document.getElementById('resetError');
+  errEl.textContent = '';
+  const res = await fetch('/api/firma/password/reset', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({recovery_token: recoveryToken, new_password: newPassword})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Zuruecksetzen.'; return; }
+  recoveryToken = null;
+  document.getElementById('resetPasswordCard').style.display = 'none';
+  document.getElementById('loginInfo').textContent = 'Passwort geaendert. Du kannst dich jetzt einloggen.';
+}
 
 async function login() {
   const email = document.getElementById('login_email').value;
@@ -114,12 +195,35 @@ async function login() {
   const errEl = document.getElementById('loginError');
   errEl.textContent = '';
   const res = await fetch('/api/firma/login', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+    method: 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin',
     body: JSON.stringify({email, password})
   });
   const data = await res.json();
   if (!res.ok) { errEl.textContent = data.detail || 'Login fehlgeschlagen.'; return; }
-  localStorage.setItem('firma_token', data.access_token);
+
+  if (data.mfa_required) {
+    pendingMfaToken = data.pending_token;
+    pendingMfaFactorId = data.factor_id;
+    document.getElementById('loginStep').style.display = 'none';
+    document.getElementById('mfaLoginStep').style.display = 'block';
+    return;
+  }
+  showDashboard(data.firma);
+}
+
+async function submitMfaLogin() {
+  const code = document.getElementById('mfa_login_code').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  const res = await fetch('/api/firma/login/mfa', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin',
+    body: JSON.stringify({pending_token: pendingMfaToken, factor_id: pendingMfaFactorId, code})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Code ungueltig.'; return; }
+  pendingMfaToken = null; pendingMfaFactorId = null;
+  document.getElementById('mfaLoginStep').style.display = 'none';
+  document.getElementById('loginStep').style.display = 'block';
   showDashboard(data.firma);
 }
 
@@ -139,8 +243,8 @@ async function signup() {
   infoEl.textContent = 'Registriert. Falls E-Mail-Bestaetigung aktiv ist, zuerst die Bestaetigungsmail bestaetigen, dann einloggen.';
 }
 
-function logout() {
-  localStorage.removeItem('firma_token');
+async function logout() {
+  await fetch('/api/firma/logout', {method: 'POST', credentials: 'same-origin'});
   document.getElementById('dashboard').style.display = 'none';
   document.getElementById('authForms').style.display = 'block';
 }
@@ -151,12 +255,48 @@ async function showDashboard(firma) {
   document.getElementById('firmaName').textContent = firma.name + ' (' + firma.email + ')';
   await loadInserate();
   await loadLeads();
+  await loadMfaStatus();
 }
 
 async function authFetch(url, options) {
   options = options || {};
-  options.headers = Object.assign({}, options.headers, {'Authorization': 'Bearer ' + token()});
+  options.credentials = 'same-origin';
   return fetch(url, options);
+}
+
+async function loadMfaStatus() {
+  // /api/firma/me kennt den MFA-Status nicht direkt - wir zeigen den
+  // Enroll-Button einfach immer an (erneutes Aktivieren ist unschaedlich,
+  // Supabase erlaubt mehrere Faktoren). Einfachste Variante ohne Zusatz-API.
+  document.getElementById('mfaStatusText').textContent = 'im Browser nicht direkt einsehbar - falls schon aktiviert, wird beim naechsten Login der Code abgefragt.';
+}
+
+async function startMfaEnroll() {
+  const errEl = document.getElementById('mfaError');
+  errEl.textContent = '';
+  const res = await authFetch('/api/firma/mfa/enroll', {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Starten der 2FA-Einrichtung.'; return; }
+  pendingMfaFactorId = data.factor_id;
+  document.getElementById('mfaQrCode').src = data.qr_code;
+  document.getElementById('mfaSecret').textContent = data.secret;
+  document.getElementById('mfaEnrollDetails').style.display = 'block';
+  document.getElementById('mfaEnrollBtn').style.display = 'none';
+}
+
+async function activateMfa() {
+  const code = document.getElementById('mfa_activate_code').value;
+  const errEl = document.getElementById('mfaError');
+  errEl.textContent = '';
+  const res = await authFetch('/api/firma/mfa/activate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({factor_id: pendingMfaFactorId, code})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Code ungueltig.'; return; }
+  document.getElementById('mfaEnrollDetails').style.display = 'none';
+  document.getElementById('mfaStatusText').textContent = 'aktiv ✓';
+  document.getElementById('mfaStatusText').className = 'mfa-active';
 }
 
 async function createInserat() {
@@ -179,7 +319,27 @@ async function createInserat() {
   });
   const data = await res.json();
   if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Erstellen.'; return; }
+
+  const bilderInput = document.getElementById('f_bilder');
+  if (bilderInput.files.length > 0) {
+    const uploadErr = await uploadBilder(data.id, bilderInput.files);
+    if (uploadErr) { errEl.textContent = uploadErr; }
+    bilderInput.value = '';
+  }
   loadInserate();
+}
+
+async function uploadBilder(immobilieId, fileList) {
+  const formData = new FormData();
+  for (const file of fileList) formData.append('files', file);
+  const res = await authFetch(`/api/firma/inserate/${immobilieId}/bilder`, {
+    method: 'POST', body: formData
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    return data.detail || 'Fehler beim Bild-Upload.';
+  }
+  return null;
 }
 
 let inserateById = {};
@@ -200,6 +360,21 @@ async function loadInserate() {
   for (const i of items) {
     const tr = document.createElement('tr');
     const nextStatus = i.status === 'aktiv' ? 'deaktiviert' : 'aktiv';
+
+    const thumbCell = document.createElement('td');
+    if (i.bilder && i.bilder.length > 0) {
+      const img = document.createElement('img');
+      img.className = 'thumb';
+      img.src = i.bilder[0];
+      img.alt = i.titel;
+      thumbCell.appendChild(img);
+    } else {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'thumb-placeholder';
+      thumbCell.appendChild(placeholder);
+    }
+    tr.appendChild(thumbCell);
+
     tr.appendChild(td(i.titel));
     tr.appendChild(td(`${i.ort}, ${i.kanton}`));
     tr.appendChild(td(i.zimmer));
@@ -215,6 +390,26 @@ async function loadInserate() {
     btn.addEventListener('click', () => toggleStatus(i.id, nextStatus));
     actionCell.appendChild(btn);
     tr.appendChild(actionCell);
+
+    const bilderCell = document.createElement('td');
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.multiple = true;
+    fileInput.accept = 'image/jpeg,image/png,image/webp';
+    fileInput.style.display = 'none';
+    fileInput.addEventListener('change', async () => {
+      if (fileInput.files.length === 0) return;
+      const err = await uploadBilder(i.id, fileInput.files);
+      if (err) alert(err);
+      loadInserate();
+    });
+    const addBtn = document.createElement('button');
+    addBtn.className = 'secondary';
+    addBtn.textContent = 'Bilder +';
+    addBtn.addEventListener('click', () => fileInput.click());
+    bilderCell.appendChild(addBtn);
+    bilderCell.appendChild(fileInput);
+    tr.appendChild(bilderCell);
 
     tbody.appendChild(tr);
   }
@@ -243,12 +438,20 @@ async function loadLeads() {
   }
 }
 
-// Beim Laden pruefen, ob schon eingeloggt
+// Beim Laden: erst pruefen, ob wir aus einem Passwort-Reset-Link kommen
+// (Supabase haengt access_token/type=recovery als URL-Fragment an), sonst
+// pruefen ob schon eingeloggt (Cookie wird automatisch mitgeschickt).
 (async function init() {
-  if (!token()) return;
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  if (hashParams.get('type') === 'recovery' && hashParams.get('access_token')) {
+    recoveryToken = hashParams.get('access_token');
+    document.getElementById('resetPasswordCard').style.display = 'block';
+    history.replaceState(null, '', window.location.pathname);  // Token nicht in der URL/Chronik stehen lassen
+    return;
+  }
+
   const res = await authFetch('/api/firma/me');
   if (res.ok) showDashboard(await res.json());
-  else localStorage.removeItem('firma_token');
 })();
 </script>
 </body>

@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+from typing import Optional
 
 import httpx
 
@@ -70,6 +71,36 @@ def send_text_message(to: str, text: str) -> None:
     except httpx.HTTPStatusError as exc:
         raise MetaWhatsAppSendError(
             f"Meta-API lehnte Nachricht ab ({exc.response.status_code}): {exc.response.text}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise MetaWhatsAppSendError(f"Meta-API nicht erreichbar: {exc}") from exc
+
+
+def send_image_message(to: str, image_url: str, caption: Optional[str] = None) -> None:
+    """Sendet ein Bild per oeffentlicher URL - Meta laedt es selbst herunter,
+    kein separater Media-Upload zu Meta noetig, da unsere Bilder bereits
+    oeffentlich auf Supabase Storage liegen."""
+    token, phone_number_id = _config()
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+    image_payload: dict = {"link": image_url}
+    if caption:
+        image_payload["caption"] = caption
+    try:
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": to.lstrip("+"),
+                "type": "image",
+                "image": image_payload,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise MetaWhatsAppSendError(
+            f"Meta-API lehnte Bild ab ({exc.response.status_code}): {exc.response.text}"
         ) from exc
     except httpx.HTTPError as exc:
         raise MetaWhatsAppSendError(f"Meta-API nicht erreichbar: {exc}") from exc

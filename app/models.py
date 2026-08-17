@@ -93,7 +93,7 @@ class Immobilie(BaseModel):
     flaeche_m2: float
     hat_garten: bool = False
     status: str = "aktiv"  # "aktiv" | "in_pruefung" | "deaktiviert"
-    bild_url: str
+    bilder: list[str] = Field(default_factory=list)
     link: str
     inseriert_am: datetime = Field(default_factory=_now)
 

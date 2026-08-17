@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -19,12 +19,36 @@ load_dotenv()
 
 from app.bootstrap import context  # noqa: E402  (nach load_dotenv)
 from app.firma_service import FirmaAuthError  # noqa: E402
+from app.image_storage import ImageUploadError, upload_image  # noqa: E402
 from app.meta_whatsapp import (  # noqa: E402
     parse_incoming_messages,
     send_text_message,
     verify_webhook_signature,
 )
 from app.models import Firma, Immobilie, Lead  # noqa: E402
+from app.supabase_auth import sign_out  # noqa: E402
+
+MAX_BILDER_PRO_INSERAT = 6
+
+
+async def _upload_bilder(immobilie_id: str, files: list[UploadFile], bereits_vorhanden: int) -> list[str]:
+    if bereits_vorhanden + len(files) > MAX_BILDER_PRO_INSERAT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximal {MAX_BILDER_PRO_INSERAT} Bilder pro Inserat erlaubt.",
+        )
+    urls: list[str] = []
+    for f in files:
+        content = await f.read()
+        try:
+            urls.append(
+                upload_image(
+                    immobilie_id, f.filename or "bild", content, f.content_type or ""
+                )
+            )
+        except ImageUploadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return urls
 
 logger = logging.getLogger("immo_bot.webhook")
 
@@ -109,13 +133,30 @@ def require_firma_service():
     return context.firma_service
 
 
-def get_current_firma(authorization: str = Header(default="")) -> Firma:
-    service = require_firma_service()
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Fehlender Authorization-Header.")
-    token = authorization.removeprefix("Bearer ").strip()
+FIRMA_COOKIE_NAME = "firma_session"
+
+
+def _set_firma_cookie(response: Response, request: Request, access_token: str) -> None:
+    # secure=True nur bei https - lokal (http://localhost) wuerde der Browser
+    # einen Secure-Cookie sonst gar nicht erst setzen.
+    response.set_cookie(
+        FIRMA_COOKIE_NAME,
+        access_token,
+        httponly=True,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+        max_age=60 * 60 * 24 * 7,
+        path="/",
+    )
+
+
+def get_current_firma(
+    firma_session: str = Cookie(default=""), service=Depends(require_firma_service)
+) -> Firma:
+    if not firma_session:
+        raise HTTPException(status_code=401, detail="Nicht eingeloggt.")
     try:
-        return service.authenticate(token)
+        return service.authenticate(firma_session)
     except FirmaAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -151,7 +192,6 @@ class NewListingRequest(BaseModel):
     preis: int
     objekttyp: str
     flaeche_m2: float = 70
-    bild_url: str = "https://picsum.photos/400/300"
     link: Optional[str] = None
     firma_id: Optional[str] = None
 
@@ -174,7 +214,6 @@ def simulate_listing(req: NewListingRequest) -> SimulateListingResponse:
         preis=req.preis,
         objekttyp=req.objekttyp,
         flaeche_m2=req.flaeche_m2,
-        bild_url=req.bild_url,
         link=req.link or "https://example.com/inserate/neu",
     )
     context.immobilien_repo.add(immobilie)
@@ -272,6 +311,18 @@ def reject_inserat(immobilie_id: str) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/admin/inserate/{immobilie_id}/bilder", dependencies=ADMIN_PROTECTED, response_model=Immobilie)
+async def admin_upload_bilder(immobilie_id: str, files: list[UploadFile] = File(...)) -> Immobilie:
+    immobilie = context.immobilien_repo.get_by_id(immobilie_id)
+    if immobilie is None:
+        raise HTTPException(status_code=404, detail="Inserat nicht gefunden.")
+
+    urls = await _upload_bilder(immobilie_id, files, bereits_vorhanden=len(immobilie.bilder))
+    neue_bilder = [*immobilie.bilder, *urls]
+    context.immobilien_repo.set_bilder(immobilie_id, neue_bilder)
+    return immobilie.model_copy(update={"bilder": neue_bilder})
+
+
 # ---------------------------------------------------------------------------
 # Firmen-Login (Supabase Auth) + Inserate-Verwaltung, mandantengetrennt (RLS)
 # ---------------------------------------------------------------------------
@@ -289,12 +340,43 @@ class FirmaLoginRequest(BaseModel):
 
 
 class FirmaLoginResponse(BaseModel):
-    access_token: str
-    firma: Firma
+    firma: Optional[Firma] = None
+    mfa_required: bool = False
+    factor_id: Optional[str] = None
+    pending_token: Optional[str] = None
+
+
+class FirmaMfaLoginRequest(BaseModel):
+    pending_token: str
+    factor_id: str
+    code: str
+
+
+class FirmaMfaActivateRequest(BaseModel):
+    factor_id: str
+    code: str
+
+
+class FirmaPasswordForgotRequest(BaseModel):
+    email: str
+
+
+class FirmaPasswordResetRequest(BaseModel):
+    recovery_token: str
+    new_password: str
+
+
+def _check_auth_rate_limit(email: str, request: Request) -> None:
+    key = f"{email.strip().lower()}|{request.client.host if request.client else 'unknown'}"
+    if not context.auth_rate_limiter.allow(key):
+        raise HTTPException(
+            status_code=429, detail="Zu viele Versuche. Bitte warte kurz und versuche es erneut."
+        )
 
 
 @app.post("/api/firma/signup", response_model=Firma)
-def firma_signup(req: FirmaSignupRequest):
+def firma_signup(req: FirmaSignupRequest, request: Request):
+    _check_auth_rate_limit(req.email, request)
     service = require_firma_service()
     try:
         return service.signup(name=req.name, email=req.email, password=req.password)
@@ -302,19 +384,99 @@ def firma_signup(req: FirmaSignupRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/firma/password/forgot")
+def firma_password_forgot(req: FirmaPasswordForgotRequest, request: Request):
+    _check_auth_rate_limit(req.email, request)
+    service = require_firma_service()
+    redirect_to = f"{request.url.scheme}://{request.url.netloc}/firma"
+    try:
+        service.request_password_reset(req.email, redirect_to=redirect_to)
+    except FirmaAuthError:
+        pass  # Betriebsfehler (z.B. Supabase-Rate-Limit) nicht an den Client durchreichen
+    # Immer dieselbe generische Antwort - egal ob die E-Mail existiert oder
+    # der Versand geklappt hat (kein Account-Enumeration-Signal).
+    return {"ok": True, "detail": "Falls ein Konto mit dieser E-Mail existiert, wurde eine E-Mail mit einem Link zum Zuruecksetzen verschickt."}
+
+
+@app.post("/api/firma/password/reset")
+def firma_password_reset(req: FirmaPasswordResetRequest):
+    service = require_firma_service()
+    try:
+        service.reset_password(req.recovery_token, req.new_password)
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
 @app.post("/api/firma/login", response_model=FirmaLoginResponse)
-def firma_login(req: FirmaLoginRequest):
+def firma_login(req: FirmaLoginRequest, request: Request, response: Response):
+    _check_auth_rate_limit(req.email, request)
     service = require_firma_service()
     try:
         result = service.login(email=req.email, password=req.password)
     except FirmaAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-    return FirmaLoginResponse(access_token=result.access_token, firma=result.firma)
+
+    if result.mfa_required:
+        return FirmaLoginResponse(
+            mfa_required=True, factor_id=result.factor_id, pending_token=result.pending_token
+        )
+
+    _set_firma_cookie(response, request, result.access_token)
+    return FirmaLoginResponse(firma=result.firma)
+
+
+@app.post("/api/firma/login/mfa", response_model=FirmaLoginResponse)
+def firma_login_mfa(req: FirmaMfaLoginRequest, request: Request, response: Response):
+    service = require_firma_service()
+    try:
+        result = service.verify_login_mfa(req.pending_token, req.factor_id, req.code)
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    _set_firma_cookie(response, request, result.access_token)
+    return FirmaLoginResponse(firma=result.firma)
+
+
+@app.post("/api/firma/logout")
+def firma_logout(response: Response, firma_session: str = Cookie(default="")):
+    if firma_session:
+        sign_out(firma_session)
+    response.delete_cookie(FIRMA_COOKIE_NAME, path="/")
+    return {"ok": True}
 
 
 @app.get("/api/firma/me", response_model=Firma)
 def firma_me(firma: Firma = Depends(get_current_firma)):
     return firma
+
+
+@app.post("/api/firma/mfa/enroll")
+def firma_mfa_enroll(firma_session: str = Cookie(default=""), firma: Firma = Depends(get_current_firma)):
+    service = require_firma_service()
+    try:
+        data = service.enroll_mfa(firma_session)
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    totp = data.get("totp") or {}
+    return {"factor_id": data.get("id"), "qr_code": totp.get("qr_code"), "secret": totp.get("secret")}
+
+
+@app.post("/api/firma/mfa/activate")
+def firma_mfa_activate(
+    req: FirmaMfaActivateRequest,
+    request: Request,
+    response: Response,
+    firma_session: str = Cookie(default=""),
+    firma: Firma = Depends(get_current_firma),
+):
+    service = require_firma_service()
+    try:
+        new_token = service.activate_mfa(firma_session, req.factor_id, req.code)
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _set_firma_cookie(response, request, new_token)
+    return {"ok": True}
 
 
 class InseratRequest(BaseModel):
@@ -328,7 +490,6 @@ class InseratRequest(BaseModel):
     objekttyp: str
     flaeche_m2: float
     hat_garten: bool = False
-    bild_url: str = "https://picsum.photos/400/300"
     link: str = "https://example.com/inserate/neu"
 
 
@@ -356,6 +517,32 @@ def firma_set_inserat_status(
     except FirmaAuthError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@app.post("/api/firma/inserate/{immobilie_id}/bilder", response_model=Immobilie)
+async def firma_upload_bilder(
+    immobilie_id: str,
+    files: list[UploadFile] = File(...),
+    firma: Firma = Depends(get_current_firma),
+):
+    eigene = context.firma_service.list_inserate(firma)
+    inserat = next((i for i in eigene if i.id == immobilie_id), None)
+    if inserat is None:
+        raise HTTPException(status_code=404, detail="Inserat nicht gefunden oder gehoert nicht dieser Firma.")
+
+    urls = await _upload_bilder(immobilie_id, files, bereits_vorhanden=len(inserat.bilder))
+    try:
+        return context.firma_service.add_bilder(firma, immobilie_id, urls)
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/firma/inserate/{immobilie_id}/bilder")
+def firma_remove_bild(immobilie_id: str, url: str, firma: Firma = Depends(get_current_firma)):
+    try:
+        return context.firma_service.remove_bild(firma, immobilie_id, url)
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/firma/leads", response_model=list[Lead])
