@@ -31,6 +31,22 @@ def main() -> None:
     else:
         resp.raise_for_status()
 
+    # Serverseitiger Backstop fuer den direkten Browser-Upload des neuen
+    # Hostpoint-Portals (dort validiert nur noch Client-JS Typ/Groesse,
+    # das ist umgehbar - siehe docs/produkt-abgleich.md).
+    update_resp = httpx.put(
+        f"{url}/storage/v1/bucket/{BUCKET}",
+        headers={"Authorization": f"Bearer {service_role_key}"},
+        json={
+            "public": True,
+            "file_size_limit": "5MB",
+            "allowed_mime_types": ["image/jpeg", "image/png", "image/webp"],
+        },
+        timeout=15,
+    )
+    update_resp.raise_for_status()
+    print(f"Bucket '{BUCKET}': file_size_limit=5MB, allowed_mime_types gesetzt.")
+
 
 if __name__ == "__main__":
     main()

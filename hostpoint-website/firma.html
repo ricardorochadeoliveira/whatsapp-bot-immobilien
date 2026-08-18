@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wohnchat.ch – Firmen-Portal</title>
+<link rel="stylesheet" href="css/site.css">
+<style>
+  body { padding: 0; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: var(--space-3); }
+  .portal-header { border-bottom: 1px solid var(--color-border); background: var(--color-bg); }
+  .portal-header .container { max-width: 720px; padding-top: var(--space-2); padding-bottom: var(--space-2); display: flex; align-items: center; }
+  .card { margin-bottom: var(--space-3); }
+  h2 { font-family: var(--font-body); font-weight: 500; font-size: 1.0625rem; color: var(--color-text); margin-bottom: var(--space-2); }
+  button { margin-top: 14px; padding: 9px 18px; border: none; border-radius: var(--radius); background: var(--color-primary); color: #fff; cursor: pointer; font-family: var(--font-body); font-size: 14px; }
+  button:hover { background: var(--color-primary-dark); }
+  button.secondary { background: var(--color-border); color: var(--color-text); margin-left: 8px; }
+  button.secondary:hover { background: #cfc6b4; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--color-border); }
+  .status-aktiv { color: var(--color-success); font-weight: 600; }
+  .status-deaktiviert { color: #999; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  #dashboard { display: none; }
+  #authForms { display: block; }
+  .checkbox-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+  .checkbox-row input { width: auto; margin-top: 0; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; }
+  .thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; display: block; background: #eee; }
+  .thumb-placeholder { width: 48px; height: 36px; border-radius: 4px; background: #e5e5e5; }
+  .hint { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; }
+  #mfaLoginStep { display: none; }
+  #mfaEnrollDetails { display: none; margin-top: 10px; }
+  #mfaEnrollDetails img { display: block; margin-top: 8px; width: 180px; height: 180px; }
+  .mfa-active { color: var(--color-success); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="portal-header">
+  <div class="container"><a class="wordmark" href="/" style="font-size:1.25rem;">wohnchat.ch</a></div>
+</header>
+
+<div class="wrap">
+  <h1 style="font-size:1.375rem;">Firmen-Portal</h1>
+
+  <div id="authForms">
+    <div class="card">
+      <h2>Login</h2>
+      <div id="loginStep">
+        <label>E-Mail <input id="login_email" type="email"></label>
+        <label>Passwort <input id="login_password" type="password"></label>
+        <button onclick="login()">Einloggen</button>
+      </div>
+      <div id="mfaLoginStep">
+        <label>6-stelliger Code aus der Authenticator-App <input id="mfa_login_code" inputmode="numeric" maxlength="6"></label>
+        <button onclick="submitMfaLogin()">Bestätigen</button>
+      </div>
+      <div id="loginError" class="error"></div>
+      <div id="loginInfo" class="info"></div>
+      <button class="secondary" onclick="toggleForgotPassword()">Passwort vergessen?</button>
+      <div id="forgotPasswordStep" style="display:none">
+        <label>E-Mail <input id="forgot_email" type="email"></label>
+        <button onclick="requestPasswordReset()">Link zum Zuruecksetzen senden</button>
+      </div>
+    </div>
+
+    <div id="resetPasswordCard" class="card" style="display:none">
+      <h2>Neues Passwort setzen</h2>
+      <label>Neues Passwort <input id="reset_password" type="password"></label>
+      <div class="hint">Mindestens 8 Zeichen, mit Buchstabe und Ziffer.</div>
+      <button onclick="submitPasswordReset()">Passwort setzen</button>
+      <div id="resetError" class="error"></div>
+    </div>
+
+    <div class="card">
+      <h2>Registrieren</h2>
+      <label>Firmenname <input id="signup_name"></label>
+      <label>E-Mail <input id="signup_email" type="email"></label>
+      <label>Passwort <input id="signup_password" type="password"></label>
+      <div class="hint">Mindestens 8 Zeichen, mit Buchstabe und Ziffer.</div>
+      <button onclick="signup()">Firma registrieren</button>
+      <div id="signupError" class="error"></div>
+      <div id="signupInfo" class="info"></div>
+    </div>
+  </div>
+
+  <div id="dashboard">
+    <div class="card topbar">
+      <div>Eingeloggt als <strong id="firmaName"></strong></div>
+      <button class="secondary" onclick="logout()">Logout</button>
+    </div>
+
+    <div class="card">
+      <h2>Profil</h2>
+      <label>Firmenname <input id="profile_name"></label>
+      <button onclick="saveProfile()">Speichern</button>
+      <div id="profileError" class="error"></div>
+      <div id="profileInfo" class="info"></div>
+    </div>
+
+    <div class="card">
+      <h2>Sicherheit</h2>
+      <div id="mfaStatus">Zwei-Faktor-Authentifizierung: <span id="mfaStatusText">wird geladen…</span></div>
+      <button id="mfaEnrollBtn" class="secondary" onclick="startMfaEnroll()">Zwei-Faktor-Authentifizierung aktivieren</button>
+      <div id="mfaEnrollDetails">
+        <div class="hint">QR-Code mit einer Authenticator-App (z.B. Google Authenticator) scannen, oder den Code manuell eintragen: <strong id="mfaSecret"></strong></div>
+        <img id="mfaQrCode" alt="QR-Code für 2FA">
+        <label>6-stelliger Code aus der App <input id="mfa_activate_code" inputmode="numeric" maxlength="6"></label>
+        <button onclick="activateMfa()">Aktivieren</button>
+      </div>
+      <div id="mfaError" class="error"></div>
+    </div>
+
+    <div class="card">
+      <h2 id="inseratFormTitle">Neues Inserat</h2>
+      <label>Titel <input id="f_titel"></label>
+      <div class="row">
+        <div><label>Typ
+          <select id="f_typ"><option value="miete">Miete</option><option value="kauf">Kauf</option></select>
+        </label></div>
+        <div><label>Objektart <input id="f_objekttyp" value="Wohnung"></label></div>
+      </div>
+      <div class="row">
+        <div><label>Zimmer <input id="f_zimmer" type="number" step="0.5" value="3"></label></div>
+        <div><label>Fläche m2 <input id="f_flaeche" type="number" value="70"></label></div>
+        <div><label>Preis CHF <input id="f_preis" type="number" value="2000"></label></div>
+      </div>
+      <div class="row">
+        <div><label>Kanton <input id="f_kanton"></label></div>
+        <div><label>Ort <input id="f_ort"></label></div>
+      </div>
+      <label>Beschreibung <textarea id="f_beschreibung" rows="2"></textarea></label>
+      <div class="checkbox-row"><input id="f_garten" type="checkbox"><label style="margin:0">Garten vorhanden</label></div>
+      <label id="f_bilder_label">Bilder (mehrere möglich, max. 6) <input id="f_bilder" type="file" multiple accept="image/jpeg,image/png,image/webp"></label>
+      <button onclick="submitInserat()">Inserat einstellen</button>
+      <button id="inseratCancelBtn" class="secondary" style="display:none" onclick="cancelInseratEdit()">Abbrechen</button>
+      <div id="inseratError" class="error"></div>
+    </div>
+
+    <div class="card">
+      <h2>Meine Inserate</h2>
+      <button onclick="loadInserate()">Aktualisieren</button>
+      <table id="inserateTable">
+        <thead><tr><th>Bild</th><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th><th></th><th></th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Leads (Interessenten aus dem WhatsApp-Chat)</h2>
+      <button onclick="loadLeads()">Aktualisieren</button>
+      <table id="leadsTable">
+        <thead><tr><th>Inserat</th><th>Status</th><th>Erhalten am</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="js/supabase-config.js"></script>
+<script src="js/password-policy.js"></script>
+<script src="js/supabase-auth.js"></script>
+<script src="js/supabase-session.js"></script>
+<script src="js/supabase-data.js"></script>
+<script src="js/firma-portal.js" defer></script>
+</body>
+</html>
