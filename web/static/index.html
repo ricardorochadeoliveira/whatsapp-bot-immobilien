@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wohnchat.ch – Wohnungssuche und Vermietung über WhatsApp</title>
+<meta name="description" content="wohnchat.ch verbindet Mietinteressenten und Vermieter über einen WhatsApp-Bot. Vermieter laden ihre Inserate mit Fotos im Firmen-Portal hoch.">
+<link rel="stylesheet" href="/static/css/site.css">
+<script src="/static/js/site.js" defer></script>
+</head>
+<body>
+
+<header class="site-nav">
+  <div class="container">
+    <a class="wordmark" href="/">wohnchat.ch</a>
+    <button class="nav-toggle" aria-label="Menü öffnen">&#9776;</button>
+    <nav class="nav-links">
+      <a href="/">Startseite</a>
+      <a href="/ueber-uns">Über uns</a>
+      <a class="btn btn-accent" href="/firma">Login</a>
+    </nav>
+  </div>
+</header>
+
+<section class="section">
+  <div class="container hero-grid">
+    <div>
+      <h1>Wohnungssuche und Vermietung, verbunden über WhatsApp.</h1>
+      <p style="font-size:1.125rem; color:var(--color-text-muted);">
+        wohnchat ist ein WhatsApp-Bot: Mietinteressenten beschreiben ihre Wunschwohnung
+        einfach im Chat, der Bot gleicht sie automatisch mit echten Inseraten ab.
+        <strong style="color:var(--color-text)">Diese Webseite ist für Vermieter</strong> –
+        hier registrieren Sie sich, laden Ihre Inserate mit Fotos hoch und erhalten
+        passende Anfragen direkt in Ihrem Firmen-Portal.
+      </p>
+      <div class="btn-row" style="margin-top: var(--space-3);">
+        <a class="btn btn-primary" href="/firma">Als Vermieter registrieren</a>
+        <a class="btn btn-outline" href="/firma">Login</a>
+      </div>
+    </div>
+    <div class="chat-mock">
+      <div class="bubble bubble-user">Suche 3.5-Zimmer-Wohnung in Zürich, bis CHF 2200, mit Garten.</div>
+      <div class="bubble bubble-bot">Ich habe 2 passende Inserate gefunden – möchtest du die Fotos sehen?</div>
+      <div class="bubble bubble-user">Ja, gerne!</div>
+      <div class="bubble bubble-bot">📷 Wohnung an der Seestrasse, 3.5 Zi., CHF 2100/Monat, Garten vorhanden.</div>
+    </div>
+  </div>
+</section>
+
+<section class="section-tight" style="background: var(--color-surface); border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border);">
+  <div class="container">
+    <h2 style="text-align:center; margin-bottom: var(--space-5);">So funktioniert's</h2>
+    <div class="card-grid">
+      <div>
+        <div class="num" style="font-size:2.5rem;">1</div>
+        <h3>Mieter schreibt dem Bot</h3>
+        <p style="color:var(--color-text-muted)">Wunschwohnung per WhatsApp beschreiben – kein Formular, keine App, kein Konto nötig.</p>
+      </div>
+      <div>
+        <div class="num" style="font-size:2.5rem;">2</div>
+        <h3>Bot gleicht automatisch ab</h3>
+        <p style="color:var(--color-text-muted)">Die Anfrage wird mit allen aktiven Inseraten der registrierten Vermieter verglichen.</p>
+      </div>
+      <div>
+        <div class="num" style="font-size:2.5rem;">3</div>
+        <h3>Vermieter erhält den Lead</h3>
+        <p style="color:var(--color-text-muted)">Passende Anfragen landen direkt im Firmen-Portal – inklusive Kontaktaufnahme über WhatsApp.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <h2 style="text-align:center; margin-bottom: var(--space-2);">Für Vermieter</h2>
+    <p style="text-align:center; max-width:640px; margin:0 auto var(--space-5); color:var(--color-text-muted);">
+      Das Firmen-Portal ist der Ort, an dem Sie Ihre Inserate verwalten und Anfragen erhalten.
+    </p>
+    <div class="card-grid">
+      <div class="card">
+        <h3>Inserate mit Fotos</h3>
+        <p style="color:var(--color-text-muted)">Bis zu 6 Bilder pro Inserat – der Bot zeigt sie Mietinteressenten direkt im WhatsApp-Chat.</p>
+      </div>
+      <div class="card">
+        <h3>Ihre Daten sehen nur Sie</h3>
+        <p style="color:var(--color-text-muted)">Strikte Mandantentrennung: Jede Firma sieht ausschliesslich ihre eigenen Inserate und Anfragen.</p>
+      </div>
+      <div class="card">
+        <h3>Sicherer Login</h3>
+        <p style="color:var(--color-text-muted)">Passwortgeschützt mit optionaler Zwei-Faktor-Authentifizierung für Ihr Konto.</p>
+      </div>
+    </div>
+    <div class="btn-row" style="justify-content:center; margin-top: var(--space-5);">
+      <a class="btn btn-primary" href="/firma">Als Vermieter registrieren</a>
+      <a class="btn btn-outline" href="/firma">Login</a>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="container">
+    <div>
+      <a class="wordmark" href="/">wohnchat.ch</a>
+      <p>Der WhatsApp-Bot, der Wohnungssuche und Vermietung in der Schweiz verbindet.</p>
+    </div>
+    <div>
+      <h4>Navigation</h4>
+      <ul>
+        <li><a href="/">Startseite</a></li>
+        <li><a href="/ueber-uns">Über uns</a></li>
+        <li><a href="/impressum">Impressum</a></li>
+        <li><a href="/agb">AGB</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Kontakt</h4>
+      <ul>
+        <li><span class="placeholder">[E-Mail]</span></li>
+        <li><a href="/firma">Firmen-Login</a></li>
+      </ul>
+    </div>
+    <div class="bottom">© 2026 wohnchat.ch</div>
+  </div>
+</footer>
+
+</body>
+</html>

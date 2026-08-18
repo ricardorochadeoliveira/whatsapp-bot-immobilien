@@ -15,10 +15,10 @@ from sqlalchemy import select
 
 from app.db import tenant_session
 from app.models import Firma, Immobilie, Lead
-from app.models_orm import ImmobilieORM, LeadORM
+from app.models_orm import FirmaORM, ImmobilieORM, LeadORM
 from app.password_policy import WeakPasswordError, validate_password_strength
 from app.repository import FirmaRepository
-from app.repository_supabase import _immobilie_from_orm, _lead_from_orm
+from app.repository_supabase import _firma_from_orm, _immobilie_from_orm, _lead_from_orm
 from app.supabase_auth import (
     SupabaseAuthError,
     _decode_jwt_aal,
@@ -34,6 +34,12 @@ from app.supabase_auth import (
 
 class FirmaAuthError(RuntimeError):
     """Signup/Login/Autorisierung fehlgeschlagen - als 401/400 an die API durchreichen."""
+
+
+EDITABLE_INSERAT_FIELDS = {
+    "titel", "beschreibung", "typ", "zimmer", "kanton", "ort",
+    "preis", "objekttyp", "flaeche_m2", "hat_garten",
+}
 
 
 def _verified_totp_factor(user: dict) -> Optional[dict]:
@@ -214,6 +220,31 @@ class FirmaService:
             row.bilder = [b for b in (row.bilder or []) if b != url]
             session.flush()
             return _immobilie_from_orm(row)
+
+    def update_inserat(self, firma: Firma, immobilie_id: str, updates: dict) -> Immobilie:
+        with tenant_session(firma_id=firma.id) as session:
+            row = session.get(ImmobilieORM, immobilie_id)
+            if row is None or row.firma_id != firma.id:
+                raise FirmaAuthError("Inserat nicht gefunden oder gehoert nicht dieser Firma.")
+            for field, value in updates.items():
+                if field in EDITABLE_INSERAT_FIELDS:
+                    setattr(row, field, value)
+            session.flush()
+            return _immobilie_from_orm(row)
+
+    def update_profile(self, firma: Firma, name: str) -> Firma:
+        # firma-Tabelle hat eine eigene RLS-Policy ueber auth_user_id (nicht
+        # firma_id) - siehe scripts/migrate_multi_tenancy.py, Policy
+        # "self_only". tenant_session() deshalb mit auth_user_id aufrufen,
+        # sonst findet session.get() die Zeile mangels gesetztem
+        # app.current_auth_user_id gar nicht erst.
+        with tenant_session(auth_user_id=firma.auth_user_id) as session:
+            row = session.get(FirmaORM, firma.id)
+            if row is None:
+                raise FirmaAuthError("Firma nicht gefunden.")
+            row.name = name.strip()
+            session.flush()
+            return _firma_from_orm(row)
 
     def list_leads(self, firma: Firma) -> list[Lead]:
         with tenant_session(firma_id=firma.id) as session:

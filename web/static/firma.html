@@ -2,25 +2,23 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>Firmen-Portal - meinwohntraum.ai</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wohnchat.ch – Firmen-Portal</title>
+<link rel="stylesheet" href="/static/css/site.css">
 <style>
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    background: #f0f2f5; color: #1b2430; padding: 24px;
-  }
-  .wrap { max-width: 720px; margin: 0 auto; }
-  h1 { font-size: 20px; }
-  .card { background: #fff; border: 1px solid #d1d7db; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
-  label { display: block; font-size: 13px; color: #555; margin-top: 10px; }
-  input, select, textarea { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-top: 4px; font-size: 14px; }
-  button { margin-top: 14px; padding: 8px 16px; border: none; border-radius: 6px; background: #075e54; color: #fff; cursor: pointer; font-size: 14px; }
-  button.secondary { background: #888; margin-left: 8px; }
-  .error { color: #b00020; font-size: 13px; margin-top: 8px; white-space: pre-wrap; }
-  .info { color: #075e54; font-size: 13px; margin-top: 8px; }
+  body { padding: 0; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: var(--space-3); }
+  .portal-header { border-bottom: 1px solid var(--color-border); background: var(--color-bg); }
+  .portal-header .container { max-width: 720px; padding-top: var(--space-2); padding-bottom: var(--space-2); display: flex; align-items: center; }
+  .card { margin-bottom: var(--space-3); }
+  h2 { font-family: var(--font-body); font-weight: 500; font-size: 1.0625rem; color: var(--color-text); margin-bottom: var(--space-2); }
+  button { margin-top: 14px; padding: 9px 18px; border: none; border-radius: var(--radius); background: var(--color-primary); color: #fff; cursor: pointer; font-family: var(--font-body); font-size: 14px; }
+  button:hover { background: var(--color-primary-dark); }
+  button.secondary { background: var(--color-border); color: var(--color-text); margin-left: 8px; }
+  button.secondary:hover { background: #cfc6b4; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
-  th, td { text-align: left; padding: 6px; border-bottom: 1px solid #eee; }
-  .status-aktiv { color: #3e5c4e; font-weight: 600; }
+  th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--color-border); }
+  .status-aktiv { color: var(--color-success); font-weight: 600; }
   .status-deaktiviert { color: #999; }
   .row { display: flex; gap: 10px; }
   .row > div { flex: 1; }
@@ -31,16 +29,21 @@
   .topbar { display: flex; justify-content: space-between; align-items: center; }
   .thumb { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; display: block; background: #eee; }
   .thumb-placeholder { width: 48px; height: 36px; border-radius: 4px; background: #e5e5e5; }
-  .hint { font-size: 12px; color: #777; margin-top: 4px; }
+  .hint { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; }
   #mfaLoginStep { display: none; }
   #mfaEnrollDetails { display: none; margin-top: 10px; }
   #mfaEnrollDetails img { display: block; margin-top: 8px; width: 180px; height: 180px; }
-  .mfa-active { color: #3e5c4e; font-weight: 600; }
+  .mfa-active { color: var(--color-success); font-weight: 600; }
 </style>
 </head>
 <body>
+
+<header class="portal-header">
+  <div class="container"><a class="wordmark" href="/" style="font-size:1.25rem;">wohnchat.ch</a></div>
+</header>
+
 <div class="wrap">
-  <h1>meinwohntraum.ai - Firmen-Portal</h1>
+  <h1 style="font-size:1.375rem;">Firmen-Portal</h1>
 
   <div id="authForms">
     <div class="card">
@@ -90,6 +93,14 @@
     </div>
 
     <div class="card">
+      <h2>Profil</h2>
+      <label>Firmenname <input id="profile_name"></label>
+      <button onclick="saveProfile()">Speichern</button>
+      <div id="profileError" class="error"></div>
+      <div id="profileInfo" class="info"></div>
+    </div>
+
+    <div class="card">
       <h2>Sicherheit</h2>
       <div id="mfaStatus">Zwei-Faktor-Authentifizierung: <span id="mfaStatusText">wird geladen…</span></div>
       <button id="mfaEnrollBtn" class="secondary" onclick="startMfaEnroll()">Zwei-Faktor-Authentifizierung aktivieren</button>
@@ -103,7 +114,7 @@
     </div>
 
     <div class="card">
-      <h2>Neues Inserat</h2>
+      <h2 id="inseratFormTitle">Neues Inserat</h2>
       <label>Titel <input id="f_titel"></label>
       <div class="row">
         <div><label>Typ
@@ -122,8 +133,9 @@
       </div>
       <label>Beschreibung <textarea id="f_beschreibung" rows="2"></textarea></label>
       <div class="checkbox-row"><input id="f_garten" type="checkbox"><label style="margin:0">Garten vorhanden</label></div>
-      <label>Bilder (mehrere möglich, max. 6) <input id="f_bilder" type="file" multiple accept="image/jpeg,image/png,image/webp"></label>
-      <button onclick="createInserat()">Inserat einstellen</button>
+      <label id="f_bilder_label">Bilder (mehrere möglich, max. 6) <input id="f_bilder" type="file" multiple accept="image/jpeg,image/png,image/webp"></label>
+      <button onclick="submitInserat()">Inserat einstellen</button>
+      <button id="inseratCancelBtn" class="secondary" style="display:none" onclick="cancelInseratEdit()">Abbrechen</button>
       <div id="inseratError" class="error"></div>
     </div>
 
@@ -131,7 +143,7 @@
       <h2>Meine Inserate</h2>
       <button onclick="loadInserate()">Aktualisieren</button>
       <table id="inserateTable">
-        <thead><tr><th>Bild</th><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th><th></th><th></th></tr></thead>
+        <thead><tr><th>Bild</th><th>Titel</th><th>Ort</th><th>Zi.</th><th>CHF</th><th>Status</th><th></th><th></th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -153,6 +165,7 @@
 let pendingMfaToken = null;
 let pendingMfaFactorId = null;
 let recoveryToken = null;
+let editingInseratId = null;
 
 function toggleForgotPassword() {
   const step = document.getElementById('forgotPasswordStep');
@@ -253,6 +266,7 @@ async function showDashboard(firma) {
   document.getElementById('authForms').style.display = 'none';
   document.getElementById('dashboard').style.display = 'block';
   document.getElementById('firmaName').textContent = firma.name + ' (' + firma.email + ')';
+  document.getElementById('profile_name').value = firma.name;
   await loadInserate();
   await loadLeads();
   await loadMfaStatus();
@@ -262,6 +276,21 @@ async function authFetch(url, options) {
   options = options || {};
   options.credentials = 'same-origin';
   return fetch(url, options);
+}
+
+async function saveProfile() {
+  const name = document.getElementById('profile_name').value;
+  const errEl = document.getElementById('profileError');
+  const infoEl = document.getElementById('profileInfo');
+  errEl.textContent = ''; infoEl.textContent = '';
+  const res = await authFetch('/api/firma/me', {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Speichern.'; return; }
+  document.getElementById('firmaName').textContent = data.name + ' (' + data.email + ')';
+  infoEl.textContent = 'Gespeichert.';
 }
 
 async function loadMfaStatus() {
@@ -299,8 +328,8 @@ async function activateMfa() {
   document.getElementById('mfaStatusText').className = 'mfa-active';
 }
 
-async function createInserat() {
-  const body = {
+function inseratFormValues() {
+  return {
     titel: document.getElementById('f_titel').value,
     beschreibung: document.getElementById('f_beschreibung').value || null,
     typ: document.getElementById('f_typ').value,
@@ -312,20 +341,68 @@ async function createInserat() {
     ort: document.getElementById('f_ort').value,
     hat_garten: document.getElementById('f_garten').checked
   };
+}
+
+function resetInseratForm() {
+  document.getElementById('f_titel').value = '';
+  document.getElementById('f_typ').value = 'miete';
+  document.getElementById('f_objekttyp').value = 'Wohnung';
+  document.getElementById('f_zimmer').value = 3;
+  document.getElementById('f_flaeche').value = 70;
+  document.getElementById('f_preis').value = 2000;
+  document.getElementById('f_kanton').value = '';
+  document.getElementById('f_ort').value = '';
+  document.getElementById('f_beschreibung').value = '';
+  document.getElementById('f_garten').checked = false;
+}
+
+function startInseratEdit(i) {
+  editingInseratId = i.id;
+  document.getElementById('f_titel').value = i.titel;
+  document.getElementById('f_typ').value = i.typ;
+  document.getElementById('f_objekttyp').value = i.objekttyp;
+  document.getElementById('f_zimmer').value = i.zimmer;
+  document.getElementById('f_flaeche').value = i.flaeche_m2;
+  document.getElementById('f_preis').value = i.preis;
+  document.getElementById('f_kanton').value = i.kanton;
+  document.getElementById('f_ort').value = i.ort;
+  document.getElementById('f_beschreibung').value = i.beschreibung || '';
+  document.getElementById('f_garten').checked = i.hat_garten;
+  document.getElementById('inseratFormTitle').textContent = 'Inserat bearbeiten';
+  document.getElementById('inseratCancelBtn').style.display = 'inline-block';
+  document.getElementById('f_bilder_label').style.display = 'none';
+  document.getElementById('inseratFormTitle').scrollIntoView({behavior: 'smooth'});
+}
+
+function cancelInseratEdit() {
+  editingInseratId = null;
+  document.getElementById('inseratFormTitle').textContent = 'Neues Inserat';
+  document.getElementById('inseratCancelBtn').style.display = 'none';
+  document.getElementById('f_bilder_label').style.display = '';
+  resetInseratForm();
+}
+
+async function submitInserat() {
+  const body = inseratFormValues();
   const errEl = document.getElementById('inseratError');
   errEl.textContent = '';
-  const res = await authFetch('/api/firma/inserate', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  const url = editingInseratId ? `/api/firma/inserate/${editingInseratId}` : '/api/firma/inserate';
+  const method = editingInseratId ? 'PATCH' : 'POST';
+  const res = await authFetch(url, {
+    method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
   });
   const data = await res.json();
-  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Erstellen.'; return; }
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Speichern.'; return; }
 
-  const bilderInput = document.getElementById('f_bilder');
-  if (bilderInput.files.length > 0) {
-    const uploadErr = await uploadBilder(data.id, bilderInput.files);
-    if (uploadErr) { errEl.textContent = uploadErr; }
-    bilderInput.value = '';
+  if (!editingInseratId) {
+    const bilderInput = document.getElementById('f_bilder');
+    if (bilderInput.files.length > 0) {
+      const uploadErr = await uploadBilder(data.id, bilderInput.files);
+      if (uploadErr) { errEl.textContent = uploadErr; }
+      bilderInput.value = '';
+    }
   }
+  cancelInseratEdit();
   loadInserate();
 }
 
@@ -382,6 +459,14 @@ async function loadInserate() {
     const statusCell = td(i.status);
     statusCell.className = `status-${i.status}`;
     tr.appendChild(statusCell);
+
+    const editCell = document.createElement('td');
+    const editBtn = document.createElement('button');
+    editBtn.className = 'secondary';
+    editBtn.textContent = 'Bearbeiten';
+    editBtn.addEventListener('click', () => startInseratEdit(i));
+    editCell.appendChild(editBtn);
+    tr.appendChild(editCell);
 
     const actionCell = document.createElement('td');
     const btn = document.createElement('button');

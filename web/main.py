@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -59,11 +59,12 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def require_admin_key(x_admin_key: str = Header(default="")):
-    """Schuetzt das interne Admin-/Chat-Simulator-Panel. Ist ADMIN_API_KEY
-    nicht gesetzt, bleibt der Bereich unprotected (lokales Entwickeln ohne
-    Reibung) - siehe docs/launch-checkliste.md fuer den Hinweis, das vor
-    einem echten Go-Live zu setzen. Das Firmen-Portal (/firma, /api/firma/*)
-    ist davon unabhaengig - das laeuft ueber Supabase Auth."""
+    """Schuetzt das interne Admin-/Chat-Simulator-Panel unter /admin. Ist
+    ADMIN_API_KEY nicht gesetzt, bleibt der Bereich unprotected (lokales
+    Entwickeln ohne Reibung) - siehe docs/launch-checkliste.md fuer den
+    Hinweis, das vor einem echten Go-Live zu setzen. Das Firmen-Portal
+    (/firma, /api/firma/*) ist davon unabhaengig - das laeuft ueber
+    Supabase Auth."""
     expected = os.environ.get("ADMIN_API_KEY")
     if expected and x_admin_key != expected:
         raise HTTPException(status_code=401, detail="Ungueltiger oder fehlender Admin-Key.")
@@ -74,15 +75,37 @@ ADMIN_PROTECTED = [Depends(require_admin_key)]
 
 @app.get("/")
 def index():
-    # Die Seite selbst enthaelt keine Daten - Schutz greift auf den
-    # API-Aufrufen, die chat.html macht (Browser-Navigation kann keine
-    # Custom-Header mitschicken, daher kein Schutz direkt auf dieser Route).
-    return FileResponse(str(STATIC_DIR / "chat.html"))
+    return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+@app.get("/ueber-uns")
+def ueber_uns():
+    return FileResponse(str(STATIC_DIR / "ueber-uns.html"))
+
+
+@app.get("/impressum")
+def impressum():
+    return FileResponse(str(STATIC_DIR / "impressum.html"))
+
+
+@app.get("/agb")
+def agb():
+    return FileResponse(str(STATIC_DIR / "agb.html"))
 
 
 @app.get("/firma")
 def firma_portal():
     return FileResponse(str(STATIC_DIR / "firma.html"))
+
+
+@app.get("/admin")
+def admin_panel():
+    # Verschoben von "/" - die Startseite ist jetzt die oeffentliche
+    # Landingpage. Die Seite selbst enthaelt keine Daten - Schutz greift
+    # auf den API-Aufrufen, die chat.html macht (Browser-Navigation kann
+    # keine Custom-Header mitschicken, daher kein Schutz direkt auf dieser
+    # Route).
+    return FileResponse(str(STATIC_DIR / "chat.html"))
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +474,18 @@ def firma_me(firma: Firma = Depends(get_current_firma)):
     return firma
 
 
+class FirmaUpdateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+
+
+@app.patch("/api/firma/me", response_model=Firma)
+def firma_update_me(req: FirmaUpdateRequest, firma: Firma = Depends(get_current_firma)):
+    try:
+        return context.firma_service.update_profile(firma, req.name)
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/firma/mfa/enroll")
 def firma_mfa_enroll(firma_session: str = Cookie(default=""), firma: Firma = Depends(get_current_firma)):
     service = require_firma_service()
@@ -517,6 +552,29 @@ def firma_set_inserat_status(
     except FirmaAuthError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}
+
+
+class InseratUpdateRequest(BaseModel):
+    titel: str
+    beschreibung: Optional[str] = None
+    typ: str = "miete"
+    zimmer: float
+    kanton: str
+    ort: str
+    preis: int
+    objekttyp: str
+    flaeche_m2: float
+    hat_garten: bool = False
+
+
+@app.patch("/api/firma/inserate/{immobilie_id}", response_model=Immobilie)
+def firma_update_inserat(
+    immobilie_id: str, req: InseratUpdateRequest, firma: Firma = Depends(get_current_firma)
+):
+    try:
+        return context.firma_service.update_inserat(firma, immobilie_id, req.model_dump())
+    except FirmaAuthError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/firma/inserate/{immobilie_id}/bilder", response_model=Immobilie)
