@@ -44,6 +44,9 @@
   .btn-oauth svg { width: 18px; height: 18px; flex-shrink: 0; }
   .switch-auth { text-align: center; margin-top: var(--space-3); font-size: 13px; color: var(--color-text-muted); }
   .switch-auth a { color: var(--color-accent); }
+  .btn-block { display: block; width: 100%; text-align: center; }
+  .link-forgot { display: block; text-align: right; font-size: 13px; color: var(--color-accent); margin-top: 8px; cursor: pointer; background: none; border: none; padding: 0; font-family: var(--font-body); }
+  .link-forgot:hover { text-decoration: underline; background: none; }
 </style>
 </head>
 <body>
@@ -61,19 +64,15 @@
       <div id="loginStep">
         <label>E-Mail <input id="login_email" type="email"></label>
         <label>Passwort <input id="login_password" type="password"></label>
-        <button onclick="login()">Einloggen</button>
+        <button type="button" class="link-forgot" onclick="showForgotPasswordView()">Passwort vergessen?</button>
+        <button class="btn-block" onclick="login()">Einloggen</button>
       </div>
       <div id="mfaLoginStep">
         <label>6-stelliger Code aus der Authenticator-App <input id="mfa_login_code" inputmode="numeric" maxlength="6"></label>
-        <button onclick="submitMfaLogin()">Bestätigen</button>
+        <button class="btn-block" onclick="submitMfaLogin()">Bestätigen</button>
       </div>
       <div id="loginError" class="error"></div>
       <div id="loginInfo" class="info"></div>
-      <button class="secondary" onclick="toggleForgotPassword()">Passwort vergessen?</button>
-      <div id="forgotPasswordStep" style="display:none">
-        <label>E-Mail <input id="forgot_email" type="email"></label>
-        <button onclick="requestPasswordReset()">Link zum Zuruecksetzen senden</button>
-      </div>
 
       <div class="divider"><span>oder</span></div>
       <button class="btn-oauth" onclick="startGoogleLogin()">
@@ -84,11 +83,21 @@
       <div class="switch-auth">Noch kein Konto? <a href="#" onclick="showRegisterView(); return false;">Jetzt registrieren</a></div>
     </div>
 
+    <div id="forgotPasswordCard" class="card" style="display:none">
+      <h2>Passwort vergessen</h2>
+      <p style="font-size:13px; color:var(--color-text-muted); margin-top:0;">Gib deine E-Mail-Adresse ein, wir senden dir einen Link zum Zurücksetzen.</p>
+      <label>E-Mail <input id="forgot_email" type="email"></label>
+      <button class="btn-block" onclick="requestPasswordReset()">Link zum Zurücksetzen senden</button>
+      <div id="forgotError" class="error"></div>
+      <div id="forgotInfo" class="info"></div>
+      <div class="switch-auth"><a href="#" onclick="showLoginView(); return false;">Zurück zum Login</a></div>
+    </div>
+
     <div id="resetPasswordCard" class="card" style="display:none">
       <h2>Neues Passwort setzen</h2>
       <label>Neues Passwort <input id="reset_password" type="password"></label>
       <div class="hint">Mindestens 8 Zeichen, mit Buchstabe und Ziffer.</div>
-      <button onclick="submitPasswordReset()">Passwort setzen</button>
+      <button class="btn-block" onclick="submitPasswordReset()">Passwort setzen</button>
       <div id="resetError" class="error"></div>
     </div>
 
@@ -98,7 +107,7 @@
       <label>E-Mail <input id="signup_email" type="email"></label>
       <label>Passwort <input id="signup_password" type="password"></label>
       <div class="hint">Mindestens 8 Zeichen, mit Buchstabe und Ziffer.</div>
-      <button onclick="signup()">Firma registrieren</button>
+      <button class="btn-block" onclick="signup()">Firma registrieren</button>
       <div id="signupError" class="error"></div>
       <div id="signupInfo" class="info"></div>
 
@@ -185,11 +194,11 @@
   </div>
 </div>
 
-<script src="js/supabase-config.js"></script>
-<script src="js/password-policy.js"></script>
-<script src="js/supabase-auth.js"></script>
-<script src="js/supabase-session.js"></script>
-<script src="js/supabase-data.js"></script>
-<script src="js/firma-portal.js" defer></script>
+<script src="js/supabase-config.js?v=2"></script>
+<script src="js/password-policy.js?v=2"></script>
+<script src="js/supabase-auth.js?v=2"></script>
+<script src="js/supabase-session.js?v=2"></script>
+<script src="js/supabase-data.js?v=2"></script>
+<script src="js/firma-portal.js?v=2" defer></script>
 </body>
 </html>

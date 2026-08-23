@@ -9,20 +9,18 @@ let editingInseratId = null;
 let currentFirma = null;
 let inserateById = {};
 
-function toggleForgotPassword() {
-  const step = document.getElementById('forgotPasswordStep');
-  step.style.display = step.style.display === 'none' ? 'block' : 'none';
+// Zentrale Sicht-Umschaltung zwischen den vier Auth-Karten - jede Karte ist
+// eine eigene, fokussierte Ansicht statt sich inline zu verschachteln.
+function showAuthView(view) {
+  document.getElementById('loginCard').style.display = view === 'login' ? 'block' : 'none';
+  document.getElementById('registerCard').style.display = view === 'register' ? 'block' : 'none';
+  document.getElementById('forgotPasswordCard').style.display = view === 'forgot' ? 'block' : 'none';
+  document.getElementById('resetPasswordCard').style.display = view === 'reset' ? 'block' : 'none';
 }
 
-function showLoginView() {
-  document.getElementById('loginCard').style.display = 'block';
-  document.getElementById('registerCard').style.display = 'none';
-}
-
-function showRegisterView() {
-  document.getElementById('loginCard').style.display = 'none';
-  document.getElementById('registerCard').style.display = 'block';
-}
+function showLoginView() { showAuthView('login'); }
+function showRegisterView() { showAuthView('register'); }
+function showForgotPasswordView() { showAuthView('forgot'); }
 
 function startGoogleLogin() {
   // Supabases eigener /authorize-Endpunkt uebernimmt den kompletten
@@ -35,14 +33,13 @@ function startGoogleLogin() {
 
 async function requestPasswordReset() {
   const email = document.getElementById('forgot_email').value;
-  const infoEl = document.getElementById('loginInfo');
-  const errEl = document.getElementById('loginError');
+  const infoEl = document.getElementById('forgotInfo');
+  const errEl = document.getElementById('forgotError');
   errEl.textContent = ''; infoEl.textContent = '';
   try {
     const redirectTo = window.location.origin + window.location.pathname;
     await supabaseRecoverPassword(email, redirectTo);
     infoEl.textContent = 'Falls ein Konto mit dieser E-Mail existiert, wurde eine E-Mail mit einem Link zum Zuruecksetzen verschickt.';
-    document.getElementById('forgotPasswordStep').style.display = 'none';
   } catch (e) {
     errEl.textContent = e.message || 'Fehler beim Anfordern.';
   }
@@ -57,7 +54,7 @@ async function submitPasswordReset() {
   try {
     await supabaseUpdatePasswordWithRecoveryToken(recoveryToken, newPassword);
     recoveryToken = null;
-    document.getElementById('resetPasswordCard').style.display = 'none';
+    showAuthView('login');
     document.getElementById('loginInfo').textContent = 'Passwort geaendert. Du kannst dich jetzt einloggen.';
   } catch (e) {
     errEl.textContent = e.message || 'Fehler beim Zuruecksetzen.';
@@ -426,7 +423,7 @@ async function loadLeads() {
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   if (hashParams.get('type') === 'recovery' && hashParams.get('access_token')) {
     recoveryToken = hashParams.get('access_token');
-    document.getElementById('resetPasswordCard').style.display = 'block';
+    showAuthView('reset');
     history.replaceState(null, '', window.location.pathname);
     return;
   }
