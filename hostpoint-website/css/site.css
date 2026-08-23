@@ -298,12 +298,42 @@ a:hover { text-decoration: underline; }
   color: #C9C2B0;
 }
 
-/* Hero-Chat-Mockup (reine div-Bubbles, keine Bilder) */
+/* Hero-Chat-Mockup: Telefon-Rahmen mit Kopfzeile statt frei schwebender
+   Bubbles - wirkt wie ein echter Ausschnitt aus dem Produkt, nicht wie ein
+   generisches Wireframe. */
 
-.chat-mock {
-  background: var(--color-surface);
+.phone-mock {
+  background: #ECE5D8;
   border: 1px solid var(--color-border);
-  border-radius: 12px;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.phone-mock-header {
+  background: var(--color-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px var(--space-3);
+}
+
+.phone-mock-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.phone-mock-avatar svg { width: 18px; height: 18px; }
+
+.phone-mock-name { font-family: var(--font-body); font-weight: 500; font-size: 0.9375rem; }
+.phone-mock-status { font-size: 0.75rem; color: rgba(255,255,255,0.7); }
+
+.phone-mock-body {
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -311,7 +341,7 @@ a:hover { text-decoration: underline; }
 }
 
 .bubble {
-  max-width: 80%;
+  max-width: 82%;
   padding: 10px 14px;
   border-radius: 14px;
   font-size: 0.9375rem;
@@ -319,7 +349,7 @@ a:hover { text-decoration: underline; }
 }
 
 .bubble-bot {
-  background: #EFEAE0;
+  background: var(--color-surface);
   color: var(--color-text);
   align-self: flex-start;
   border-bottom-left-radius: 2px;
@@ -331,6 +361,145 @@ a:hover { text-decoration: underline; }
   align-self: flex-end;
   border-bottom-right-radius: 2px;
 }
+
+/* Listing-Karte innerhalb einer Bot-Bubble (statt Emoji+Text) */
+.bubble-listing {
+  align-self: flex-start;
+  max-width: 82%;
+  background: var(--color-surface);
+  border-radius: 12px;
+  border-bottom-left-radius: 2px;
+  padding: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.bubble-listing-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.bubble-listing-thumb svg { width: 20px; height: 20px; }
+.bubble-listing-info strong {
+  display: block;
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+.bubble-listing-info span { font-size: 0.8125rem; color: var(--color-text-muted); }
+
+/* Verbundene Schritte ("So funktioniert's") - keine Karten, sondern
+   Kreise mit verbindender Linie, damit es sich vom Karten-Raster unten
+   unterscheidet. */
+
+.step-flow {
+  display: flex;
+  align-items: flex-start;
+}
+
+.step-flow-item {
+  flex: 1;
+  position: relative;
+  padding: 0 var(--space-3);
+  text-align: center;
+}
+
+.step-flow-item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 27px;
+  left: 50%;
+  width: 100%;
+  height: 1px;
+  background: var(--color-border);
+  z-index: 1;
+}
+
+.step-flow-circle {
+  position: relative;
+  z-index: 2;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  margin: 0 auto var(--space-2);
+}
+
+/* Asymmetrischer Feature-Split ("Für Vermieter") - eine grosse Haupt-Karte
+   plus zwei kleinere, statt drei gleich grosser Karten. */
+
+.feature-split {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: var(--space-3);
+}
+
+.feature-main {
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.feature-main h3 { color: #fff; font-size: 1.375rem; }
+.feature-main p { color: #D8DED9; }
+.feature-main .feature-icon { background: rgba(255,255,255,0.12); color: #fff; }
+
+.feature-stack { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.feature-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-2);
+}
+.feature-icon svg { width: 20px; height: 20px; }
+
+/* Icon-Zeilen ("Unsere Werte" auf Ueber uns) - horizontale Liste statt
+   Karten-Raster, damit nicht jede Seite gleich aussieht. */
+
+.value-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.value-row:last-child { border-bottom: none; }
+
+.value-icon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.value-icon svg { width: 22px; height: 22px; }
 
 /* Formularelemente (auch von firma.html genutzt) */
 
@@ -368,6 +537,7 @@ input:focus, select:focus, textarea:focus {
   .card-grid { grid-template-columns: 1fr 1fr; }
   .site-footer .container { grid-template-columns: 1fr 1fr; }
   .hero-grid { grid-template-columns: 1fr; }
+  .feature-split { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -387,4 +557,7 @@ input:focus, select:focus, textarea:focus {
   .nav-links.open { display: flex; }
   .card-grid { grid-template-columns: 1fr; }
   .site-footer .container { grid-template-columns: 1fr; }
+  .step-flow { flex-direction: column; gap: var(--space-4); }
+  .step-flow-item::after { display: none; }
+  .value-row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
 }
