@@ -14,6 +14,25 @@ function toggleForgotPassword() {
   step.style.display = step.style.display === 'none' ? 'block' : 'none';
 }
 
+function showLoginView() {
+  document.getElementById('loginCard').style.display = 'block';
+  document.getElementById('registerCard').style.display = 'none';
+}
+
+function showRegisterView() {
+  document.getElementById('loginCard').style.display = 'none';
+  document.getElementById('registerCard').style.display = 'block';
+}
+
+function startGoogleLogin() {
+  // Supabases eigener /authorize-Endpunkt uebernimmt den kompletten
+  // OAuth-Austausch mit Google - wir muessen nur dorthin umleiten, kein
+  // eigener Server noetig. Nach Abschluss leitet Supabase zurueck auf
+  // redirectTo mit den Tokens im URL-Fragment (siehe init()).
+  const redirectTo = window.location.origin + window.location.pathname;
+  window.location.href = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`;
+}
+
 async function requestPasswordReset() {
   const email = document.getElementById('forgot_email').value;
   const infoEl = document.getElementById('loginInfo');
@@ -399,15 +418,42 @@ async function loadLeads() {
   }
 }
 
-// Beim Laden: erst pruefen, ob wir aus einem Passwort-Reset-Link kommen
-// (Supabase haengt access_token/type=recovery als URL-Fragment an), sonst
-// pruefen ob schon eine gueltige lokale Session existiert.
+// Beim Laden: erst pruefen, ob wir aus einem Passwort-Reset-Link kommen,
+// dann ob wir aus einer Google-Anmeldung zurueckkommen (Supabase haengt in
+// beiden Faellen Tokens als URL-Fragment an), sonst pruefen ob schon eine
+// gueltige lokale Session existiert.
 (async function init() {
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   if (hashParams.get('type') === 'recovery' && hashParams.get('access_token')) {
     recoveryToken = hashParams.get('access_token');
     document.getElementById('resetPasswordCard').style.display = 'block';
     history.replaceState(null, '', window.location.pathname);
+    return;
+  }
+
+  if (hashParams.get('access_token')) {
+    history.replaceState(null, '', window.location.pathname);
+    const accessToken = hashParams.get('access_token');
+    const refreshToken = hashParams.get('refresh_token');
+    const expiresIn = parseInt(hashParams.get('expires_in') || '3600', 10);
+    try {
+      const user = await supabaseGetUser(accessToken);
+      const factor = findVerifiedTotpFactor(user);
+      if (factor) {
+        // Google bestaetigt nur die Identitaet, nicht unsere eigene
+        // 2FA-Pflicht - gleicher Zwischenschritt wie beim Passwort-Login.
+        pendingMfaToken = accessToken;
+        pendingMfaFactorId = factor.id;
+        document.getElementById('loginStep').style.display = 'none';
+        document.getElementById('mfaLoginStep').style.display = 'block';
+        return;
+      }
+      saveSession({ access_token: accessToken, refresh_token: refreshToken, expires_in: expiresIn });
+      const firma = await ensureOwnFirma(user.id, user.email);
+      showDashboard(firma);
+    } catch {
+      /* Google-Login fehlgeschlagen - Login-Formular bleibt sichtbar */
+    }
     return;
   }
 
