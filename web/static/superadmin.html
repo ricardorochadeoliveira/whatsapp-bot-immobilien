@@ -28,8 +28,7 @@
   #mfaEnrollDetails { display: none; margin-top: 10px; }
   #mfaEnrollDetails img { display: block; margin-top: 8px; width: 180px; height: 180px; }
   .mfa-active { color: var(--color-success); font-weight: 600; }
-  .tab-panel { display: none; }
-  .tab-panel.active { display: block; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; }
   .file-tree { list-style: none; margin: 10px 0 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--radius); }
   .file-tree li { padding: 6px 10px; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--color-border); }
   .file-tree li:last-child { border-bottom: none; }
@@ -41,6 +40,13 @@
   .warn-banner { background: #FBF1E6; border: 1px solid var(--color-accent); border-radius: var(--radius); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); font-size: 13px; color: var(--color-text); }
   .quelle-count { display: inline-block; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 12px; margin: 0 6px 6px 0; font-size: 12px; }
   @media (max-width: 860px) { .editor-grid { grid-template-columns: 1fr; } }
+  #assistantInstruction { height: 90px; }
+  #assistantResult { display: none; margin-top: var(--space-2); }
+  #assistantSummary { white-space: pre-wrap; }
+  #assistantTestOutput, #assistantDiff { max-height: 320px; overflow: auto; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius); padding: var(--space-2); font-family: 'Courier New', monospace; font-size: 12px; white-space: pre; }
+  #assistantPushRow { display: none; margin-top: var(--space-2); }
+  .badge-success { color: var(--color-success); font-weight: 600; }
+  .badge-fail { color: var(--color-error); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -66,80 +72,87 @@
   </div>
 </div>
 
-<div class="portal-shell" id="dashboard">
-  <nav class="portal-sidebar">
-    <span class="wordmark" style="display:block;margin-bottom:var(--space-2);">Superadmin</span>
-    <button class="portal-nav-item active" onclick="showTab('tab-dashboard', this)">Dashboard</button>
-    <button class="portal-nav-item" onclick="showTab('tab-fehler', this)">Fehler-Protokoll</button>
-    <button class="portal-nav-item" onclick="showTab('tab-editor', this)">Code-Editor</button>
-    <button class="portal-nav-item" onclick="showTab('tab-sicherheit', this)">Sicherheit</button>
-    <div class="portal-nav-divider"></div>
-    <button class="portal-nav-item" onclick="logout()">Logout</button>
-  </nav>
+<div class="wrap" id="dashboard">
+  <div class="card topbar">
+    <div>Eingeloggt als <strong id="superadminEmail"></strong></div>
+    <button class="secondary" onclick="logout()">Logout</button>
+  </div>
 
-  <main class="portal-main">
-    <div class="tab-panel active" id="tab-dashboard">
-      <div class="card">
-        <div class="topbar" style="display:flex;justify-content:space-between;align-items:center;">
-          <h2 style="margin:0;">Bot-Statistiken</h2>
-          <button class="secondary" onclick="loadStats()">Aktualisieren</button>
-        </div>
-        <div class="stat-grid" id="statGrid" style="margin-top:var(--space-2);"></div>
+  <div class="card">
+    <div class="topbar">
+      <h2 style="margin:0;">Bot-Statistiken</h2>
+      <button class="secondary" onclick="loadStats()">Aktualisieren</button>
+    </div>
+    <div class="stat-grid" id="statGrid" style="margin-top:var(--space-2);"></div>
+  </div>
+
+  <div class="card">
+    <div class="topbar">
+      <h2 style="margin:0;">Fehler-Protokoll</h2>
+      <button class="secondary" onclick="loadFehler()">Aktualisieren</button>
+    </div>
+    <div id="fehlerSummary" style="margin-top:var(--space-2);"></div>
+    <table id="fehlerTable">
+      <thead><tr><th>Zeitpunkt</th><th>Quelle</th><th>Telefonnummer</th><th>Meldung</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Code-Editor</h2>
+    <div class="warn-banner">⚠️ Änderungen hier gehen über einen echten Git-Commit direkt live, sobald Railway deployed hat. Kein Diff-Review, keine automatischen Tests.</div>
+    <div class="editor-grid">
+      <div>
+        <label>Ordner <input id="editorPath" value=""></label>
+        <button class="secondary" onclick="loadFileList()">Ordner anzeigen</button>
+        <ul class="file-tree" id="fileTree"></ul>
+      </div>
+      <div>
+        <div id="editorFilePath" class="hint"></div>
+        <textarea id="editorContent" spellcheck="false" disabled placeholder="Datei aus der Liste links öffnen..."></textarea>
+        <label>Commit-Message <input id="editorCommitMessage" placeholder="z.B. Bot-Text angepasst"></label>
+        <button id="editorSaveBtn" onclick="saveFile()" disabled>Speichern</button>
+        <div id="editorError" class="error"></div>
+        <div id="editorInfo" class="info"></div>
       </div>
     </div>
+  </div>
 
-    <div class="tab-panel" id="tab-fehler">
-      <div class="card">
-        <div class="topbar" style="display:flex;justify-content:space-between;align-items:center;">
-          <h2 style="margin:0;">Fehler-Protokoll</h2>
-          <button class="secondary" onclick="loadFehler()">Aktualisieren</button>
-        </div>
-        <div id="fehlerSummary" style="margin-top:var(--space-2);"></div>
-        <table id="fehlerTable">
-          <thead><tr><th>Zeitpunkt</th><th>Quelle</th><th>Telefonnummer</th><th>Meldung</th></tr></thead>
-          <tbody></tbody>
-        </table>
+  <div class="card">
+    <h2>KI-Assistent</h2>
+    <div class="warn-banner">⚠️ Diese Aenderungen stammen von einer KI, nicht von dir. Der Testlauf ist das einzige automatische Sicherheitsnetz - prueft den Diff unten trotzdem genau, bevor du pushst.</div>
+    <label>Was soll geaendert werden? <textarea id="assistantInstruction" placeholder="z.B. 'Aendere die Begruessung im Chat freundlicher'"></textarea></label>
+    <button id="assistantRunBtn" onclick="runAssistant()">Ausfuehren</button>
+    <div id="assistantStatus" class="hint"></div>
+    <div id="assistantError" class="error"></div>
+    <div id="assistantResult">
+      <h3>Zusammenfassung</h3>
+      <div id="assistantSummary"></div>
+      <h3>Testergebnis <span id="assistantTestBadge"></span></h3>
+      <div id="assistantTestOutput"></div>
+      <h3>Diff</h3>
+      <div id="assistantDiff"></div>
+      <div id="assistantPushRow">
+        <label>Commit-Message <input id="assistantCommitMessage" placeholder="z.B. Begruessungstext angepasst"></label>
+        <button onclick="pushAssistantSession()">Committen & Pushen</button>
+        <div id="assistantPushInfo" class="info"></div>
       </div>
     </div>
+  </div>
 
-    <div class="tab-panel" id="tab-editor">
-      <div class="card">
-        <h2>Code-Editor</h2>
-        <div class="warn-banner">⚠️ Änderungen hier gehen über einen echten Git-Commit direkt live, sobald Railway deployed hat. Kein Diff-Review, keine automatischen Tests.</div>
-        <div class="editor-grid">
-          <div>
-            <label>Ordner <input id="editorPath" value=""></label>
-            <button class="secondary" onclick="loadFileList()">Ordner anzeigen</button>
-            <ul class="file-tree" id="fileTree"></ul>
-          </div>
-          <div>
-            <div id="editorFilePath" class="hint"></div>
-            <textarea id="editorContent" spellcheck="false" disabled placeholder="Datei aus der Liste links öffnen..."></textarea>
-            <label>Commit-Message <input id="editorCommitMessage" placeholder="z.B. Bot-Text angepasst"></label>
-            <button id="editorSaveBtn" onclick="saveFile()" disabled>Speichern</button>
-            <div id="editorError" class="error"></div>
-            <div id="editorInfo" class="info"></div>
-          </div>
-        </div>
-      </div>
+  <div class="card">
+    <h2>Zwei-Faktor-Authentifizierung</h2>
+    <div class="hint">Angesichts der Reichweite des Code-Editors dringend empfohlen.</div>
+    <div id="mfaStatus">Status: <span id="mfaStatusText">im Browser nicht direkt einsehbar - falls schon aktiviert, wird beim nächsten Login der Code abgefragt.</span></div>
+    <button id="mfaEnrollBtn" class="secondary" onclick="startMfaEnroll()">Aktivieren</button>
+    <div id="mfaEnrollDetails">
+      <div class="hint">QR-Code mit einer Authenticator-App scannen, oder den Code manuell eintragen: <strong id="mfaSecret"></strong></div>
+      <img id="mfaQrCode" alt="QR-Code für 2FA">
+      <label>6-stelliger Code aus der App <input id="mfa_activate_code" inputmode="numeric" maxlength="6"></label>
+      <button onclick="activateMfa()">Bestätigen</button>
     </div>
-
-    <div class="tab-panel" id="tab-sicherheit">
-      <div class="card">
-        <h2>Zwei-Faktor-Authentifizierung</h2>
-        <div class="hint">Angesichts der Reichweite des Code-Editors dringend empfohlen.</div>
-        <div id="mfaStatus">Status: <span id="mfaStatusText">im Browser nicht direkt einsehbar - falls schon aktiviert, wird beim nächsten Login der Code abgefragt.</span></div>
-        <button id="mfaEnrollBtn" class="secondary" onclick="startMfaEnroll()">Aktivieren</button>
-        <div id="mfaEnrollDetails">
-          <div class="hint">QR-Code mit einer Authenticator-App scannen, oder den Code manuell eintragen: <strong id="mfaSecret"></strong></div>
-          <img id="mfaQrCode" alt="QR-Code für 2FA">
-          <label>6-stelliger Code aus der App <input id="mfa_activate_code" inputmode="numeric" maxlength="6"></label>
-          <button onclick="activateMfa()">Bestätigen</button>
-        </div>
-        <div id="mfaError" class="error"></div>
-      </div>
-    </div>
-  </main>
+    <div id="mfaError" class="error"></div>
+  </div>
 </div>
 
 <script>
@@ -151,15 +164,6 @@ async function authFetch(url, options) {
   options = options || {};
   options.credentials = 'same-origin';
   return fetch(url, options);
-}
-
-function showTab(id, btn) {
-  document.querySelectorAll('.tab-panel').forEach(el => el.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-  document.querySelectorAll('.portal-nav-item').forEach(el => el.classList.remove('active'));
-  if (btn) btn.classList.add('active');
-  if (id === 'tab-dashboard') loadStats();
-  if (id === 'tab-fehler') loadFehler();
 }
 
 async function login() {
@@ -180,7 +184,7 @@ async function login() {
     document.getElementById('mfaLoginStep').style.display = 'block';
     return;
   }
-  showDashboard();
+  showDashboard(data.email);
 }
 
 async function submitMfaLogin() {
@@ -194,7 +198,7 @@ async function submitMfaLogin() {
   const data = await res.json();
   if (!res.ok) { errEl.textContent = data.detail || 'Code ungültig.'; return; }
   pendingMfaToken = null; pendingMfaFactorId = null;
-  showDashboard();
+  showDashboard(data.email);
 }
 
 async function logout() {
@@ -203,10 +207,12 @@ async function logout() {
   document.getElementById('authForms').style.display = 'block';
 }
 
-async function showDashboard() {
+async function showDashboard(email) {
   document.getElementById('authForms').style.display = 'none';
-  document.getElementById('dashboard').style.display = 'grid';
+  document.getElementById('dashboard').style.display = 'block';
+  document.getElementById('superadminEmail').textContent = email || '';
   await loadStats();
+  await loadFehler();
 }
 
 function statTile(label, value) {
@@ -333,6 +339,66 @@ async function saveFile() {
   infoEl.textContent = 'Gespeichert und committet. Railway deployt jetzt automatisch.';
 }
 
+let assistantSessionId = null;
+
+async function runAssistant() {
+  const instruction = document.getElementById('assistantInstruction').value.trim();
+  const errEl = document.getElementById('assistantError');
+  const statusEl = document.getElementById('assistantStatus');
+  const runBtn = document.getElementById('assistantRunBtn');
+  errEl.textContent = '';
+  document.getElementById('assistantResult').style.display = 'none';
+  document.getElementById('assistantPushRow').style.display = 'none';
+  if (!instruction) { errEl.textContent = 'Bitte beschreiben, was geaendert werden soll.'; return; }
+
+  runBtn.disabled = true;
+  statusEl.textContent = 'Läuft... das kann 30-90 Sekunden dauern (Claude liest Code, schreibt Änderungen, führt Tests aus).';
+  try {
+    const res = await authFetch('/api/superadmin/assistant/run', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({instruction})
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Ausführen.'; return; }
+
+    assistantSessionId = data.session_id || null;
+    document.getElementById('assistantSummary').textContent = data.summary;
+    document.getElementById('assistantTestOutput').textContent = data.test_output || '(keine Ausgabe)';
+    document.getElementById('assistantDiff').textContent = data.diff || '(keine Änderungen)';
+    const badge = document.getElementById('assistantTestBadge');
+    badge.textContent = data.success ? '✓ erfolgreich' : '✗ nicht bereit zum Committen';
+    badge.className = data.success ? 'badge-success' : 'badge-fail';
+    document.getElementById('assistantResult').style.display = 'block';
+    document.getElementById('assistantPushRow').style.display = data.success ? 'block' : 'none';
+  } finally {
+    runBtn.disabled = false;
+    statusEl.textContent = '';
+  }
+}
+
+async function pushAssistantSession() {
+  const errEl = document.getElementById('assistantError');
+  const infoEl = document.getElementById('assistantPushInfo');
+  errEl.textContent = ''; infoEl.textContent = '';
+  if (!assistantSessionId) { errEl.textContent = 'Keine gültige Session - bitte erneut ausführen.'; return; }
+  const commitMessage = document.getElementById('assistantCommitMessage').value.trim();
+  if (!commitMessage) { errEl.textContent = 'Commit-Message ist Pflicht.'; return; }
+
+  const filesChanged = document.getElementById('assistantDiff').textContent;
+  const fileCount = (filesChanged.match(/^--- a\//gm) || []).length;
+  if (!confirm(`Das ändert ${fileCount} Datei(en) direkt live, sobald Railway deployed hat. Diff oben genau geprüft? Fortfahren?`)) return;
+
+  const res = await authFetch('/api/superadmin/assistant/push', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: assistantSessionId, commit_message: commitMessage})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Pushen.'; return; }
+  infoEl.textContent = 'Gepusht (Commit ' + data.commit_sha.slice(0, 7) + '). Railway deployt jetzt automatisch.';
+  document.getElementById('assistantPushRow').style.display = 'none';
+  assistantSessionId = null;
+}
+
 async function loadMfaStatus() {
   document.getElementById('mfaStatusText').textContent = 'im Browser nicht direkt einsehbar - falls schon aktiviert, wird beim nächsten Login der Code abgefragt.';
 }
@@ -367,7 +433,7 @@ async function activateMfa() {
 
 (async function init() {
   const res = await authFetch('/api/superadmin/me');
-  if (res.ok) showDashboard();
+  if (res.ok) showDashboard((await res.json()).email);
 })();
 </script>
 </body>

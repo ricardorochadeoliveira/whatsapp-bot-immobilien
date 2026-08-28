@@ -11,6 +11,7 @@ import logging
 from typing import Callable
 
 from app.chat_service import ChatService
+from app.code_assistant import cleanup_orphaned_tmpdirs
 from app.db import get_database_url, get_engine, get_runtime_database_url, get_session_factory
 from app.firma_service import FirmaService
 from app.matching import MatchingEngine
@@ -164,6 +165,10 @@ def _ensure_demo_firma(session_factory, firma_repo) -> None:
 
 class AppContext:
     def __init__(self):
+        # Verwaiste Tempordner eines fruehen Absturzes waehrend eines KI-
+        # Assistenten-Laufs aufraeumen (siehe app/code_assistant.py) - vor
+        # allem anderen, damit ein hartnaeckiger Ordner nie liegen bleibt.
+        cleanup_orphaned_tmpdirs()
         (
             self.immobilien_repo,
             self.kunden_repo,

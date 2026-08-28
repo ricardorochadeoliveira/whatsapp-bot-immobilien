@@ -19,8 +19,14 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from app.bootstrap import context  # noqa: E402  (nach load_dotenv)
+from app import code_assistant  # noqa: E402
 from app import github_editor  # noqa: E402
 from app import superadmin_auth  # noqa: E402
+from app.code_assistant import (  # noqa: E402
+    CodeAssistantConfigError,
+    CodeAssistantConflictError,
+    SessionNotFoundError,
+)
 from app.firma_service import FirmaAuthError  # noqa: E402
 from app.github_editor import GithubEditorConflictError, GithubEditorError  # noqa: E402
 from app.image_storage import ImageUploadError, upload_image  # noqa: E402
@@ -843,3 +849,53 @@ def superadmin_write_file(req: SuperadminFileWriteRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GithubEditorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# KI-Code-Assistent (siehe app/code_assistant.py) - Claude schreibt Code
+# selbst, Tests entscheiden ueber "commit-ready", Push bleibt ein eigener,
+# expliziter Schritt.
+# ---------------------------------------------------------------------------
+
+
+class SuperadminAssistantRunRequest(BaseModel):
+    instruction: str
+
+
+class SuperadminAssistantRunResponse(BaseModel):
+    session_id: str
+    success: bool
+    summary: str
+    test_output: str
+    diff: str
+    files_changed: list[str]
+
+
+class SuperadminAssistantPushRequest(BaseModel):
+    session_id: str
+    commit_message: str
+
+
+@app.post(
+    "/api/superadmin/assistant/run",
+    dependencies=SUPERADMIN_PROTECTED,
+    response_model=SuperadminAssistantRunResponse,
+)
+def superadmin_assistant_run(req: SuperadminAssistantRunRequest) -> SuperadminAssistantRunResponse:
+    try:
+        result = code_assistant.run_assistant(req.instruction)
+    except CodeAssistantConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return SuperadminAssistantRunResponse(**result.__dict__)
+
+
+@app.post("/api/superadmin/assistant/push", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_assistant_push(req: SuperadminAssistantPushRequest) -> dict:
+    try:
+        return code_assistant.push_session(req.session_id, req.commit_message)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CodeAssistantConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except CodeAssistantConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

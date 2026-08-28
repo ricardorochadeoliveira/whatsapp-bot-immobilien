@@ -17,7 +17,9 @@ import os
 
 import httpx
 
-ALLOWED_PREFIXES = ("app/", "web/", "tests/", "docs/")
+from app.code_paths import ALLOWED_PREFIXES, InvalidPathError
+from app.code_paths import validate_path as _validate_path_str
+
 COMMIT_AUTHOR = {"name": "Wohnchat Superadmin", "email": "superadmin@wohnchat.ch"}
 
 
@@ -44,20 +46,13 @@ def _config() -> tuple[str, str, str]:
 
 
 def _validate_path(path: str) -> str:
-    normalized = path.strip().lstrip("/")
-    if not normalized:
-        return normalized  # leerer Pfad = Repo-Wurzel, nur fuer list_directory erlaubt
-    if ".." in normalized.split("/"):
-        raise GithubEditorError("Ungueltiger Pfad.")
-    if ".env" in normalized:
-        raise GithubEditorError("Diese Datei ist nicht editierbar.")
-    if normalized.startswith(".git/") or normalized == ".git":
-        raise GithubEditorError("Diese Datei ist nicht editierbar.")
-    if not normalized.startswith(ALLOWED_PREFIXES):
-        raise GithubEditorError(
-            f"Nur Pfade unter {', '.join(ALLOWED_PREFIXES)} sind editierbar."
-        )
-    return normalized
+    """Duenner Wrapper um app.code_paths.validate_path (geteilt mit
+    app/code_assistant.py) - mappt auf GithubEditorError statt InvalidPathError,
+    damit bestehende Aufrufer/Tests unveraendert bleiben."""
+    try:
+        return _validate_path_str(path)
+    except InvalidPathError as exc:
+        raise GithubEditorError(str(exc)) from exc
 
 
 def _headers(token: str) -> dict:
