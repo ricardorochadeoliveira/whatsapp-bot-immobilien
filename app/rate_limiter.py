@@ -17,6 +17,7 @@ Redis) laufen - siehe docs/launch-checkliste.md.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections import defaultdict
 
@@ -33,6 +34,7 @@ class RateLimiter:
         self._global_per_minute = global_per_minute
         self._phone_timestamps: dict[str, list[float]] = defaultdict(list)
         self._global_timestamps: list[float] = []
+        self._lock = threading.Lock()
 
     def allow(self, telefonnummer: str) -> bool:
         """True, wenn ein Claude-Aufruf fuer diese Telefonnummer jetzt erlaubt
@@ -40,21 +42,22 @@ class RateLimiter:
         in dem Fall wird NICHTS gezaehlt/aufgerufen."""
         now = time.time()
 
-        self._global_timestamps[:] = [t for t in self._global_timestamps if t > now - 60]
-        if len(self._global_timestamps) >= self._global_per_minute:
-            return False
+        with self._lock:
+            self._global_timestamps[:] = [t for t in self._global_timestamps if t > now - 60]
+            if len(self._global_timestamps) >= self._global_per_minute:
+                return False
 
-        history = self._phone_timestamps[telefonnummer]
-        history[:] = [t for t in history if t > now - 86400]
-        last_minute = [t for t in history if t > now - 60]
-        if len(last_minute) >= self._per_phone_per_minute:
-            return False
-        if len(history) >= self._per_phone_per_day:
-            return False
+            history = self._phone_timestamps[telefonnummer]
+            history[:] = [t for t in history if t > now - 86400]
+            last_minute = [t for t in history if t > now - 60]
+            if len(last_minute) >= self._per_phone_per_minute:
+                return False
+            if len(history) >= self._per_phone_per_day:
+                return False
 
-        history.append(now)
-        self._global_timestamps.append(now)
-        return True
+            history.append(now)
+            self._global_timestamps.append(now)
+            return True
 
 
 def build_default_rate_limiter() -> RateLimiter:

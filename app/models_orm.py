@@ -93,6 +93,25 @@ class LeadORM(Base):
     erstellt_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ChatKontaktORM(Base):
+    __tablename__ = "chat_kontakt"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    telefonnummer: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    erstellt_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    letzte_aktivitaet_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FehlerLogORM(Base):
+    __tablename__ = "fehler_log"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    quelle: Mapped[str] = mapped_column(String(64), nullable=False)
+    meldung: Mapped[str] = mapped_column(String, nullable=False)
+    telefonnummer: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    erstellt_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class MatchLogORM(Base):
     __tablename__ = "match_log"
     __table_args__ = (UniqueConstraint("suchprofil_id", "immobilie_id", name="uq_match_log_pair"),)

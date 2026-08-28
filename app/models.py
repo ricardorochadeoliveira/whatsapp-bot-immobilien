@@ -110,6 +110,30 @@ class Lead(BaseModel):
     erstellt_am: datetime = Field(default_factory=_now)
 
 
+class ChatKontakt(BaseModel):
+    """Jede Telefonnummer, die dem Bot jemals geschrieben hat - unabhaengig
+    vom Gespraechsverlauf (im Unterschied zu Kunde, das nur bei einem
+    bestaetigten Suchabo entsteht). Traegt die Kennzahlen im Superadmin-
+    Dashboard: Gesamtzahl Kontakte + "gerade aktiv" ueber letzte_aktivitaet_am."""
+
+    id: str = Field(default_factory=_new_id)
+    telefonnummer: str
+    erstellt_am: datetime = Field(default_factory=_now)
+    letzte_aktivitaet_am: datetime = Field(default_factory=_now)
+
+
+class FehlerLog(BaseModel):
+    """Protokolliert Fehler, die waehrend einer echten Kundeninteraktion
+    auftreten (z.B. WhatsApp-Versand fehlgeschlagen, Claude-API nicht
+    erreichbar) - Grundlage fuer das Fehler-Protokoll im Superadmin-Bereich."""
+
+    id: str = Field(default_factory=_new_id)
+    quelle: str
+    meldung: str
+    telefonnummer: Optional[str] = None
+    erstellt_am: datetime = Field(default_factory=_now)
+
+
 class MatchLog(BaseModel):
     id: str = Field(default_factory=_new_id)
     suchprofil_id: str

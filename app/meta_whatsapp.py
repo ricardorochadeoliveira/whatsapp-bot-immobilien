@@ -6,13 +6,15 @@ docs/produkt-abgleich.md fuer die Begruendung (Meta Business Account war
 bereits vorhanden, direkte Anbindung ist guenstiger und nicht wesentlich
 aufwaendiger).
 
-Drei Bausteine:
-- send_text_message(): ausgehende Nachrichten senden.
+Bausteine:
+- send_text_message()/send_image_message()/send_button_message()/
+  send_list_message(): ausgehende Nachrichten senden (Text, Bild, Reply-
+  Buttons, List Message).
 - verify_webhook_signature(): prueft, dass ein Webhook-Aufruf wirklich von
   Meta kommt (HMAC-SHA256 mit dem App-Secret) - ohne das koennte jeder
   gefaelschte "eingehende Nachrichten" an unseren Webhook schicken.
-- parse_incoming_messages(): extrahiert (telefonnummer, text)-Paare aus
-  einem Meta-Webhook-Payload.
+- parse_incoming_messages(): extrahiert (telefonnummer, text, message_id)-
+  Tupel aus einem Meta-Webhook-Payload (Text- und Interactive-Antworten).
 """
 from __future__ import annotations
 
@@ -106,6 +108,71 @@ def send_image_message(to: str, image_url: str, caption: Optional[str] = None) -
         raise MetaWhatsAppSendError(f"Meta-API nicht erreichbar: {exc}") from exc
 
 
+def send_button_message(to: str, body_text: str, options: list[tuple[str, str]]) -> None:
+    """Sendet eine WhatsApp Reply-Buttons-Nachricht. options: Liste von
+    (id, title) - max. 3 (Meta-Limit fuer Reply Buttons)."""
+    token, phone_number_id = _config()
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+    buttons = [
+        {"type": "reply", "reply": {"id": option_id, "title": title}}
+        for option_id, title in options
+    ]
+    try:
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": to.lstrip("+"),
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": body_text},
+                    "action": {"buttons": buttons},
+                },
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise MetaWhatsAppSendError(
+            f"Meta-API lehnte Nachricht ab ({exc.response.status_code}): {exc.response.text}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise MetaWhatsAppSendError(f"Meta-API nicht erreichbar: {exc}") from exc
+
+
+def send_list_message(to: str, body_text: str, button_label: str, options: list[tuple[str, str]]) -> None:
+    """Sendet eine WhatsApp List-Message. options: Liste von (id, title) -
+    max. 10 Zeilen (Meta-Limit fuer List Messages)."""
+    token, phone_number_id = _config()
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{phone_number_id}/messages"
+    rows = [{"id": option_id, "title": title} for option_id, title in options]
+    try:
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "messaging_product": "whatsapp",
+                "to": to.lstrip("+"),
+                "type": "interactive",
+                "interactive": {
+                    "type": "list",
+                    "body": {"text": body_text},
+                    "action": {"button": button_label, "sections": [{"rows": rows}]},
+                },
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise MetaWhatsAppSendError(
+            f"Meta-API lehnte Nachricht ab ({exc.response.status_code}): {exc.response.text}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise MetaWhatsAppSendError(f"Meta-API nicht erreichbar: {exc}") from exc
+
+
 def verify_webhook_signature(payload: bytes, signature_header: str) -> bool:
     app_secret = os.environ.get("META_APP_SECRET")
     if not app_secret or not signature_header or not signature_header.startswith("sha256="):
@@ -115,17 +182,34 @@ def verify_webhook_signature(payload: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected, provided)
 
 
-def parse_incoming_messages(payload: dict) -> list[tuple[str, str]]:
-    """Ignoriert Statusupdates (delivered/read) und Nicht-Text-Nachrichten
-    (Bilder, Standort etc. - vorerst nicht unterstuetzt)."""
+def parse_incoming_messages(payload: dict) -> list[tuple[str, str, str]]:
+    """Ignoriert Statusupdates (delivered/read) und Nicht-Text/-Interactive-
+    Nachrichten (Bilder, Standort etc. - vorerst nicht unterstuetzt).
+
+    Ein Tap auf einen Button/eine Listen-Zeile (type == "interactive") wird
+    wie eine getippte Freitext-Antwort behandelt: der Titel der angetippten
+    Option wird als Text zurueckgegeben (nicht die id), damit
+    ChatService.handle_message keinen Unterschied zwischen Tippen und
+    Antippen macht (z.B. "Egal" antippen == "Egal" tippen).
+
+    Gibt zusaetzlich Metas Nachrichten-ID (wamid) mit aus, damit der Aufrufer
+    Wiederholungszustellungen erkennen kann (siehe app/webhook_dedup.py)."""
     results = []
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
             for message in value.get("messages", []):
+                message_id = message.get("id", "")
                 if message.get("type") == "text":
                     telefonnummer = "+" + message["from"].lstrip("+")
                     text = message.get("text", {}).get("body", "")
                     if text:
-                        results.append((telefonnummer, text))
+                        results.append((telefonnummer, text, message_id))
+                elif message.get("type") == "interactive":
+                    interactive = message.get("interactive", {})
+                    reply = interactive.get("button_reply") or interactive.get("list_reply")
+                    title = reply.get("title") if reply else None
+                    if title:
+                        telefonnummer = "+" + message["from"].lstrip("+")
+                        results.append((telefonnummer, title, message_id))
     return results

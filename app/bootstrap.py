@@ -8,6 +8,7 @@ Matching-Engine, Matching-Job und Chat-Service kennen den Unterschied nicht.
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from app.chat_service import ChatService
 from app.db import get_database_url, get_engine, get_runtime_database_url, get_session_factory
@@ -22,26 +23,41 @@ from app.rate_limiter import RateLimiter
 logger = logging.getLogger("immo_bot.bootstrap")
 
 
-def _meta_outbound_sender(to: str, text: str) -> None:
+def _build_outbound_sender(fehlerlog_repo) -> Callable[[str, str], None]:
     """Wrapper um send_text_message: Fehler (z.B. 24h-Fenster abgelaufen,
     Meta-API nicht erreichbar) duerfen proaktive Benachrichtigungen nicht
-    zum Absturz bringen - nur loggen und weitermachen."""
-    try:
-        send_text_message(to, text)
-    except Exception:
-        logger.exception("WhatsApp-Versand an %s fehlgeschlagen", to)
+    zum Absturz bringen - nur loggen und weitermachen. Faengt auch im
+    Fehler-Protokoll auf (siehe app/repository.py: FehlerLogRepository)."""
+
+    def _send(to: str, text: str) -> None:
+        try:
+            send_text_message(to, text)
+        except Exception as exc:
+            logger.exception("WhatsApp-Versand an %s fehlgeschlagen", to)
+            fehlerlog_repo.add("whatsapp_proactive_send", str(exc), telefonnummer=to)
+
+    return _send
 
 
-def _meta_image_sender(to: str, image_url: str, caption: str | None) -> None:
+def _build_image_sender(fehlerlog_repo) -> Callable[[str, str, str | None], None]:
     """Wrapper um send_image_message - gleiches Fehlerverhalten wie
-    _meta_outbound_sender."""
-    try:
-        send_image_message(to, image_url, caption)
-    except Exception:
-        logger.exception("WhatsApp-Bildversand an %s fehlgeschlagen", to)
+    _build_outbound_sender."""
+
+    def _send(to: str, image_url: str, caption: str | None) -> None:
+        try:
+            send_image_message(to, image_url, caption)
+        except Exception as exc:
+            logger.exception("WhatsApp-Bildversand an %s fehlgeschlagen", to)
+            fehlerlog_repo.add("whatsapp_proactive_send", str(exc), telefonnummer=to)
+
+    return _send
 from app.repository import (
+    ChatKontaktRepository,
+    FehlerLogRepository,
     FirmaRepository,
     ImmobilienRepository,
+    InMemoryChatKontaktRepository,
+    InMemoryFehlerLogRepository,
     InMemoryFirmaRepository,
     InMemoryImmobilienRepository,
     InMemoryKundenRepository,
@@ -63,6 +79,8 @@ def _build_repos() -> tuple[
     MatchLogRepository,
     LeadRepository,
     FirmaRepository,
+    ChatKontaktRepository,
+    FehlerLogRepository,
 ]:
     if not get_database_url():
         return (
@@ -72,10 +90,14 @@ def _build_repos() -> tuple[
             InMemoryMatchLogRepository(),
             InMemoryLeadRepository(),
             InMemoryFirmaRepository(),
+            InMemoryChatKontaktRepository(),
+            InMemoryFehlerLogRepository(),
         )
 
     from app.models_orm import Base
     from app.repository_supabase import (
+        SupabaseChatKontaktRepository,
+        SupabaseFehlerLogRepository,
         SupabaseFirmaRepository,
         SupabaseImmobilienRepository,
         SupabaseKundenRepository,
@@ -106,6 +128,8 @@ def _build_repos() -> tuple[
         SupabaseMatchLogRepository(session_factory),
         SupabaseLeadRepository(session_factory),
         firma_repo,
+        SupabaseChatKontaktRepository(session_factory),
+        SupabaseFehlerLogRepository(session_factory),
     )
 
 
@@ -147,6 +171,8 @@ class AppContext:
             self.matchlog_repo,
             self.lead_repo,
             self.firma_repo,
+            self.chatkontakt_repo,
+            self.fehlerlog_repo,
         ) = _build_repos()
 
         # FirmaService (Login/Signup/Firmen-Portal) braucht die eingeschraenkte
@@ -159,6 +185,12 @@ class AppContext:
         # Instanz als der Chat-Rate-Limiter (Key hier ist "email|ip" statt
         # Telefonnummer, die Klasse ist generisch genug dafuer).
         self.auth_rate_limiter = RateLimiter(
+            per_phone_per_minute=5, per_phone_per_day=50, global_per_minute=30
+        )
+        # Eigene, ebenso strenge Instanz fuer den Superadmin-Login - getrennt
+        # vom Firmenportal-Login, damit ein Brute-Force-Versuch auf das eine
+        # nicht das Limit des anderen mitverbraucht.
+        self.superadmin_rate_limiter = RateLimiter(
             per_phone_per_minute=5, per_phone_per_day=50, global_per_minute=30
         )
 
@@ -179,8 +211,11 @@ class AppContext:
             suchprofil_repo=self.suchprofil_repo,
             dispatcher=self.dispatcher,
             lead_repo=self.lead_repo,
-            outbound_sender=_meta_outbound_sender if meta_whatsapp_configured() else None,
-            image_sender=_meta_image_sender if meta_whatsapp_configured() else None,
+            outbound_sender=_build_outbound_sender(self.fehlerlog_repo) if meta_whatsapp_configured() else None,
+            image_sender=_build_image_sender(self.fehlerlog_repo) if meta_whatsapp_configured() else None,
+            firma_service=self.firma_service,
+            chatkontakt_repo=self.chatkontakt_repo,
+            fehlerlog_repo=self.fehlerlog_repo,
         )
 
 

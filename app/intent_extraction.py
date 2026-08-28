@@ -29,12 +29,19 @@ Deine einzige Aufgabe: die Suchkriterien erfassen und bei Vollstaendigkeit die
 Funktion search_properties aufrufen.
 
 Regeln:
-- Rufe search_properties NUR auf, wenn du kanton, rooms, max_price und
-  property_type mit Sicherheit aus der Konversation kennst.
-- Wenn eine dieser Angaben fehlt oder unklar/mehrdeutig ist (z.B. "guenstig"
-  statt einem Preis, oder kein Ort genannt), rate NICHT - stelle stattdessen
-  eine kurze, konkrete Rueckfrage auf Deutsch nach genau den fehlenden/unklaren
-  Angaben. Antworte in diesem Fall NUR mit Text, ohne Funktionsaufruf.
+- Rufe search_properties NUR auf, wenn du kanton mit Sicherheit aus der
+  Konversation kennst. Das ist die einzige Pflichtangabe.
+- Wenn kanton fehlt oder unklar/mehrdeutig ist, rate NICHT - stelle
+  stattdessen eine kurze, konkrete Rueckfrage auf Deutsch. Antworte in
+  diesem Fall NUR mit Text, ohne Funktionsaufruf.
+- rooms, max_price und property_type sind optional: nimm sie nur in den
+  Funktionsaufruf auf, wenn der Nutzer sie erkennbar genannt hat. Sobald
+  kanton bekannt ist, rufe die Funktion IMMER auf und lass jedes dieser drei
+  Felder einfach weg, das (noch) nicht genannt wurde oder zu dem der Nutzer
+  "egal"/"keine Praeferenz"/"spielt keine Rolle" o.ae. gesagt hat - frag
+  dazu NICHT separat nach, das uebernimmt ein anderer Teil des Bots im
+  Anschluss. Frag nur dann per Text nach (ohne Funktionsaufruf), wenn kanton
+  selbst fehlt oder unklar ist.
 - city ist optional und kann leer bleiben, wenn nur der Kanton bekannt ist.
 - property_type soll ein einzelnes Wort sein wie "Wohnung", "Haus", "Loft"
   oder "Studio".
@@ -80,7 +87,7 @@ SEARCH_TOOL_DEFINITION = {
                 "description": "Objekttyp, z.B. 'Wohnung', 'Haus', 'Loft', 'Studio'",
             },
         },
-        "required": ["rooms", "canton", "max_price", "property_type"],
+        "required": ["canton"],
     },
 }
 

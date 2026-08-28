@@ -20,9 +20,12 @@ Vermieter-Ablauf (Firma ODER Privatperson, kein Login):
 """
 from __future__ import annotations
 
+import re
+import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from app.firma_service import FirmaAuthError, FirmaService
 from app.intent_extraction import (
     IntentExtractionConfigError,
     extract_intent,
@@ -33,6 +36,8 @@ from app.models import Immobilie, Kunde, Lead, SearchCriteria, Suchprofil
 from app.notifications import NotificationDispatcher
 from app.rate_limiter import RateLimiter, build_default_rate_limiter
 from app.repository import (
+    ChatKontaktRepository,
+    FehlerLogRepository,
     FirmaRepository,
     ImmobilienRepository,
     KundenRepository,
@@ -47,6 +52,78 @@ MIETER_WOERTER = {"mieter", "mieterin", "suche", "suchend", "wohnungssuche"}
 FIRMA_WOERTER = {"firma", "unternehmen", "company", "geschaeft"}
 PRIVAT_WOERTER = {"privat", "privatperson", "person", "einzelperson"}
 RESET_WOERTER = {"reset", "neustart", "neu anfangen", "von vorne"}
+
+# Grosszuegiger als die exakten Keyword-Sets oben (Teilstring- statt
+# Exakt-Match): hier sind Falsch-Positive praktisch ausgeschlossen (eine
+# Zimmerzahl/ein Preis enthaelt nie zufaellig "egal"), und genau das
+# Nicht-Erkennen von "Egal" war der gemeldete Bug.
+EGAL_PHRASES = {
+    "egal", "keine praeferenz", "keine ahnung", "weiss nicht",
+    "spielt keine rolle", "keine vorgabe", "unwichtig",
+}
+
+# Feste Auswahl fuer die gefuehrte Zimmer-/Objekttyp-Rueckfrage (siehe
+# _ask_search_slot) - Titel sind absichtlich das, was auch als Freitext
+# eingegeben werden koennte, da ein Tap auf eine Option denselben Text wie
+# eine getippte Antwort erzeugt (app/meta_whatsapp.py: parse_incoming_messages).
+ROOMS_OPTIONS = [
+    ("1", "1"), ("1.5", "1.5"), ("2", "2"), ("2.5", "2.5"), ("3", "3"),
+    ("3.5", "3.5"), ("4", "4"), ("4.5", "4.5"), ("5+", "5+"), ("egal", "Egal"),
+]
+PROPERTY_TYPE_OPTIONS = [
+    ("wohnung", "Wohnung"), ("haus", "Haus"), ("loft", "Loft"),
+    ("studio", "Studio"), ("egal", "Egal"),
+]
+PROPERTY_TYPES = {"wohnung", "haus", "loft", "studio"}
+ROOMS_PATTERN = re.compile(r"(\d+(?:[.,]\d+)?)")
+
+# Buttons fuer die bestehenden Ja/Nein- bzw. Zwei-Wege-Entscheidungen (ids
+# entsprechen bewusst den bereits vorhandenen Keyword-Sets oben - Tap und
+# Freitext landen dadurch in derselben, unveraenderten Matching-Logik).
+ROLE_OPTIONS = [("vermieter", "Vermieter"), ("mieter", "Mieter")]
+VERMIETER_TYP_OPTIONS = [("firma", "Firma"), ("privatperson", "Privatperson")]
+JA_NEIN_OPTIONS = [("ja", "Ja"), ("nein", "Nein")]
+WEBSITE_OR_CHAT_OPTIONS = [("webseite", "Webseite"), ("chat", "Hier im Chat")]
+
+# Teilstring-Abgleich wie bei EGAL_PHRASES - erkennt auch Freitext wie
+# "lieber auf der webseite", nicht nur den exakten Button-Titel.
+WEBSITE_WOERTER = {"webseite", "website", "homepage", "seite"}
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _is_egal(text: str) -> bool:
+    normalized = text.strip().lower()
+    return any(phrase in normalized for phrase in EGAL_PHRASES)
+
+
+def _parse_rooms_answer(text: str) -> tuple[bool, Optional[float]]:
+    """(True, wert) bei erkannter Antwort (wert=None fuer "egal"), sonst
+    (False, None) - der Aufrufer fragt in dem Fall erneut nach."""
+    if _is_egal(text):
+        return True, None
+    match = ROOMS_PATTERN.search(text.replace(",", "."))
+    if match:
+        return True, float(match.group(1))
+    return False, None
+
+
+def _parse_property_type_answer(text: str) -> tuple[bool, Optional[str]]:
+    if _is_egal(text):
+        return True, None
+    normalized = text.strip().lower()
+    for option in PROPERTY_TYPES:
+        if option in normalized:
+            return True, option.capitalize()
+    return False, None
+
+
+def _parse_price_answer(text: str) -> tuple[bool, Optional[int]]:
+    if _is_egal(text):
+        return True, None
+    digits = re.sub(r"[^\d]", "", text)
+    if digits:
+        return True, int(digits)
+    return False, None
 
 # Kostenschutz fuer die Claude-API (siehe app/rate_limiter.py und
 # docs/launch-checkliste.md): Nachrichten werden nicht unbegrenzt lang oder
@@ -67,17 +144,43 @@ class PendingLead:
 
 
 @dataclass
+class InteractivePrompt:
+    """Zeigt an, dass die zuletzt zurueckgegebene Bot-Antwort als WhatsApp
+    Button-/List-Message statt als reiner Text verschickt werden soll (siehe
+    web/main.py: _process_message). kind: "button" | "list"."""
+
+    kind: str
+    options: list[tuple[str, str]]
+    list_button_label: Optional[str] = None
+
+
+@dataclass
 class Session:
     telefonnummer: str
     role: Optional[str] = None  # "vermieter" | "mieter"
     role_frage_gestellt: bool = False
     vermieter_typ: Optional[str] = None  # "firma" | "privatperson"
     vermieter_firma_id: Optional[str] = None
+    # Schrittkette fuer den Vermieter-Flow (siehe _handle_vermieter):
+    # "website_or_chat" | "typ" | "name" | "email" | "password" | "done".
+    # None nur ganz am Anfang, bevor _start_vermieter_flow ueberhaupt lief.
+    vermieter_step: Optional[str] = None
+    vermieter_name: Optional[str] = None
+    vermieter_email: Optional[str] = None
     claude_messages: list[dict] = field(default_factory=list)  # Mieter-Suche
     listing_messages: list[dict] = field(default_factory=list)  # Vermieter-Inserat
     display_messages: list[dict] = field(default_factory=list)
     pending_criteria: Optional[SearchCriteria] = None
     pending_lead: Optional[PendingLead] = None
+    pending_interactive: Optional[InteractivePrompt] = None
+    pending_search_slot: Optional[str] = None  # "rooms" | "property_type" | "max_price"
+    partial_criteria: Optional[SearchCriteria] = None
+    # Felder, die bereits gefragt UND beantwortet wurden - auch wenn die
+    # Antwort "Egal" war (dann bleibt das Feld auf SearchCriteria weiterhin
+    # None). Ohne diese Liste liesse sich "noch nicht gefragt" nicht von
+    # "gefragt, Antwort war Egal" unterscheiden und die Frage wuerde sich
+    # wiederholen (siehe _next_missing_search_slot).
+    resolved_search_slots: set = field(default_factory=set)
 
     def add_display(self, role: str, text: str) -> None:
         self.display_messages.append({"role": role, "text": text})
@@ -123,6 +226,9 @@ class ChatService:
         rate_limiter: Optional[RateLimiter] = None,
         outbound_sender: Optional[Callable[[str, str], None]] = None,
         image_sender: Optional[Callable[[str, str, Optional[str]], None]] = None,
+        firma_service: Optional[FirmaService] = None,
+        chatkontakt_repo: Optional[ChatKontaktRepository] = None,
+        fehlerlog_repo: Optional[FehlerLogRepository] = None,
     ):
         self._matching_engine = matching_engine
         self._immobilien_repo = immobilien_repo
@@ -132,6 +238,11 @@ class ChatService:
         self._dispatcher = dispatcher
         self._lead_repo = lead_repo
         self._rate_limiter = rate_limiter or build_default_rate_limiter()
+        # Fuer echte Konto-Erstellung (E-Mail/Passwort) direkt im WhatsApp-
+        # Vermieter-Flow (siehe _handle_vermieter) - None, wenn nicht
+        # konfiguriert (z.B. DATABASE_URL_RUNTIME fehlt lokal); der Flow
+        # faellt dann auf das reine Telefonnummer-Verfahren von frueher zurueck.
+        self._firma_service = firma_service
         # Fuer proaktive Nachrichten (Match-Benachrichtigung, Freigabe-
         # Bestaetigung), die nicht als direkte Antwort auf eine eingehende
         # Nachricht entstehen - z.B. ein Aufruf von send_text_message aus
@@ -142,7 +253,13 @@ class ChatService:
         # bester Suchtreffer) - analog outbound_sender, None im simulierten
         # Web-Chat.
         self._image_sender = image_sender
+        # Fuer den Superadmin-Bereich (Statistiken/Fehler-Protokoll) - None,
+        # wenn nicht konfiguriert (z.B. in Tests), dann bleiben die
+        # entsprechenden Hooks unten einfach No-Ops.
+        self._chatkontakt_repo = chatkontakt_repo
+        self._fehlerlog_repo = fehlerlog_repo
         self._sessions: dict[str, Session] = {}
+        self._lock = threading.Lock()
         self._dispatcher.register(self._on_match)
 
     def get_session(self, telefonnummer: str) -> Session:
@@ -198,7 +315,17 @@ class ChatService:
         )
 
     def handle_message(self, telefonnummer: str, text: str) -> list[str]:
+        # Grobkoerniger, globaler Lock statt Pro-Telefonnummer-Granularitaet:
+        # stellt das bisherige (durch den Single-Event-Loop erzwungene)
+        # Verhalten wieder her, seit die Verarbeitung ueber FastAPIs
+        # Background-Tasks in einem Threadpool laeuft und dadurch echt
+        # parallel auf self._sessions/den Rate-Limiter zugreifen koennte.
+        with self._lock:
+            return self._handle_message_locked(telefonnummer, text)
+
+    def _handle_message_locked(self, telefonnummer: str, text: str) -> list[str]:
         session = self.get_session(telefonnummer)
+        session.pending_interactive = None
 
         if len(text) > MAX_MESSAGE_LENGTH:
             antwort = (
@@ -209,7 +336,11 @@ class ChatService:
             session.add_display("bot", antwort)
             return [antwort]
 
-        session.add_display("user", text)
+        # Waehrend des Passwort-Schritts NIE den Klartext im (admin-
+        # einsehbaren) Chatverlauf speichern - siehe _handle_vermieter.
+        session.add_display("user", "••••••••" if session.vermieter_step == "password" else text)
+        if self._chatkontakt_repo is not None:
+            self._chatkontakt_repo.record_activity(telefonnummer)
 
         if text.strip().lower() in RESET_WOERTER:
             session.reset()
@@ -229,17 +360,12 @@ class ChatService:
                 session.role = neue_rolle
                 session.role_frage_gestellt = True
                 if neue_rolle == "vermieter":
-                    antwort_text = (
-                        "Alles klar, du bist jetzt als Vermieter unterwegs! Bist du "
-                        "eine Firma oder Privatperson? Antworte mit 'Firma' oder "
-                        "'Privatperson'."
-                    )
-                else:
-                    antwort_text = (
-                        "Alles klar, du bist jetzt als Mieter unterwegs! Beschreib "
-                        "mir einfach, was du suchst (z.B. '2.5-Zimmer-Wohnung in "
-                        "Zug, max 2000.-')."
-                    )
+                    return self._start_vermieter_flow(session)
+                antwort_text = (
+                    "Alles klar, du bist jetzt als Mieter unterwegs! Beschreib "
+                    "mir einfach, was du suchst (z.B. '2.5-Zimmer-Wohnung in "
+                    "Zug, max 2000.-')."
+                )
                 session.add_display("bot", antwort_text)
                 return [antwort_text]
 
@@ -249,9 +375,7 @@ class ChatService:
             return [antwort]
 
         if session.role is None:
-            antwort = self._handle_role_selection(session, text)
-            session.add_display("bot", antwort)
-            return [antwort]
+            return self._handle_role_selection(session, text)
 
         if session.role == "vermieter":
             return self._handle_vermieter(session, text)
@@ -260,57 +384,173 @@ class ChatService:
 
     def _ask_role(self, session: Session) -> str:
         session.role_frage_gestellt = True
+        session.pending_interactive = InteractivePrompt("button", ROLE_OPTIONS)
         return (
             "Willkommen! Bist du Vermieter (Inserat aufgeben) oder Mieter "
             "(Wohnung suchen)? Antworte mit 'Vermieter' oder 'Mieter'."
         )
 
-    def _handle_role_selection(self, session: Session, text: str) -> str:
+    def _handle_role_selection(self, session: Session, text: str) -> list[str]:
         if not session.role_frage_gestellt:
-            return self._ask_role(session)
+            antwort = self._ask_role(session)
+            session.add_display("bot", antwort)
+            return [antwort]
 
         antwort = text.strip().lower()
         if antwort in VERMIETER_WOERTER:
             session.role = "vermieter"
-            return "Alles klar! Bist du eine Firma oder Privatperson? Antworte mit 'Firma' oder 'Privatperson'."
+            return self._start_vermieter_flow(session)
         if antwort in MIETER_WOERTER:
             session.role = "mieter"
-            return "Alles klar! Beschreib mir einfach, was du suchst (z.B. '2.5-Zimmer-Wohnung in Zug, max 2000.-')."
-        return "Bitte antworte mit 'Vermieter' oder 'Mieter'."
+            antwort_text = "Alles klar! Beschreib mir einfach, was du suchst (z.B. '2.5-Zimmer-Wohnung in Zug, max 2000.-')."
+            session.add_display("bot", antwort_text)
+            return [antwort_text]
+        session.pending_interactive = InteractivePrompt("button", ROLE_OPTIONS)
+        antwort_text = "Bitte antworte mit 'Vermieter' oder 'Mieter'."
+        session.add_display("bot", antwort_text)
+        return [antwort_text]
 
     # -- Vermieter -----------------------------------------------------
 
-    def _handle_vermieter(self, session: Session, text: str) -> list[str]:
-        if session.vermieter_typ is None:
-            antwort = self._handle_vermieter_typ(session, text)
-        elif session.vermieter_firma_id is None:
-            antwort = self._handle_vermieter_name(session, text)
-        else:
-            return self._handle_listing_extraction(session, text)
+    LISTING_PROMPT = (
+        "Jetzt beschreib mir dein Inserat in einem Satz "
+        "(Titel, Zimmer, Ort, Kanton, Preis, Miete oder Kauf, Flaeche in m2)."
+    )
 
+    def _start_vermieter_flow(self, session: Session) -> list[str]:
+        """Einstiegspunkt, sobald jemand Vermieter wird - entweder direkt
+        weiter (wiederkehrender, bereits per Konto verifizierter Vermieter)
+        oder mit der Webseite-oder-Chat-Frage. Wird von beiden Stellen
+        aufgerufen, die session.role = "vermieter" setzen."""
+        bestehende_firma = None
+        if self._firma_service is not None:
+            bestehende_firma = self._firma_repo.get_by_phone(session.telefonnummer)
+
+        if bestehende_firma is not None and bestehende_firma.auth_user_id is not None:
+            session.vermieter_firma_id = bestehende_firma.id
+            session.vermieter_typ = bestehende_firma.typ
+            session.vermieter_step = "done"
+            antwort = f"Willkommen zurueck, {bestehende_firma.name}! {self.LISTING_PROMPT}"
+            session.add_display("bot", antwort)
+            return [antwort]
+
+        session.vermieter_step = "website_or_chat"
+        antwort = (
+            "Moechtest du dein Inserat lieber direkt auf unserer Webseite "
+            "erstellen? Das geht oft schneller: wohnchat.ch/firma.html. Oder "
+            "ich fuehre dich hier im Chat durch die Erfassung - dann richte "
+            "ich dir dabei gleich ein Konto ein, mit dem du dich auch auf der "
+            "Webseite einloggen kannst."
+        )
+        session.pending_interactive = InteractivePrompt("button", WEBSITE_OR_CHAT_OPTIONS)
         session.add_display("bot", antwort)
         return [antwort]
 
-    def _handle_vermieter_typ(self, session: Session, text: str) -> str:
-        antwort = text.strip().lower()
-        if antwort in FIRMA_WOERTER:
-            session.vermieter_typ = "firma"
-            return "Wie heisst deine Firma?"
-        if antwort in PRIVAT_WOERTER:
-            session.vermieter_typ = "privatperson"
-            return "Wie ist dein Name?"
-        return "Bitte antworte mit 'Firma' oder 'Privatperson'."
+    def _handle_vermieter(self, session: Session, text: str) -> list[str]:
+        if session.vermieter_step == "website_or_chat":
+            return self._handle_vermieter_website_choice(session, text)
+        if session.vermieter_step == "typ":
+            return self._handle_vermieter_typ_step(session, text)
+        if session.vermieter_step == "name":
+            return self._handle_vermieter_name_step(session, text)
+        if session.vermieter_step == "email":
+            return self._handle_vermieter_email_step(session, text)
+        if session.vermieter_step == "password":
+            return self._handle_vermieter_password_step(session, text)
+        return self._handle_listing_extraction(session, text)
 
-    def _handle_vermieter_name(self, session: Session, text: str) -> str:
-        name = text.strip()
-        firma = self._firma_repo.get_or_create_by_phone(
-            session.telefonnummer, name, session.vermieter_typ
+    def _handle_vermieter_website_choice(self, session: Session, text: str) -> list[str]:
+        normalized = text.strip().lower()
+        session.vermieter_step = "typ"
+        frage = "Bist du eine Firma oder Privatperson? Antworte mit 'Firma' oder 'Privatperson'."
+        session.pending_interactive = InteractivePrompt("button", VERMIETER_TYP_OPTIONS)
+        if any(w in normalized for w in WEBSITE_WOERTER):
+            hinweis = (
+                "Klar, hier nochmal der Link: wohnchat.ch/firma.html - dort kannst "
+                "du dich registrieren und dein Inserat direkt erfassen. Falls du "
+                "lieber hier weitermachst, kein Problem:"
+            )
+            session.add_display("bot", hinweis)
+            session.add_display("bot", frage)
+            return [hinweis, frage]
+        session.add_display("bot", frage)
+        return [frage]
+
+    def _handle_vermieter_typ_step(self, session: Session, text: str) -> list[str]:
+        antwort_lower = text.strip().lower()
+        if antwort_lower in FIRMA_WOERTER:
+            session.vermieter_typ = "firma"
+            session.vermieter_step = "name"
+            antwort = "Wie heisst deine Firma?"
+        elif antwort_lower in PRIVAT_WOERTER:
+            session.vermieter_typ = "privatperson"
+            session.vermieter_step = "name"
+            antwort = "Wie ist dein Name?"
+        else:
+            session.pending_interactive = InteractivePrompt("button", VERMIETER_TYP_OPTIONS)
+            antwort = "Bitte antworte mit 'Firma' oder 'Privatperson'."
+        session.add_display("bot", antwort)
+        return [antwort]
+
+    def _handle_vermieter_name_step(self, session: Session, text: str) -> list[str]:
+        session.vermieter_name = text.strip()
+
+        if self._firma_service is None:
+            # Konto-Erstellung nicht konfiguriert (z.B. DATABASE_URL_RUNTIME
+            # fehlt lokal) - wie frueher: nur ueber die Telefonnummer merken,
+            # kein echtes Konto.
+            firma = self._firma_repo.get_or_create_by_phone(
+                session.telefonnummer, session.vermieter_name, session.vermieter_typ
+            )
+            session.vermieter_firma_id = firma.id
+            session.vermieter_step = "done"
+            antwort = f"Danke! {self.LISTING_PROMPT}"
+            session.add_display("bot", antwort)
+            return [antwort]
+
+        session.vermieter_step = "email"
+        antwort = (
+            "Danke! Damit du dein Inserat auch spaeter verwalten und dich "
+            "ebenfalls auf der Webseite einloggen kannst, richte ich dir "
+            "gleich ein Konto ein. Wie lautet deine E-Mail-Adresse?"
         )
+        session.add_display("bot", antwort)
+        return [antwort]
+
+    def _handle_vermieter_email_step(self, session: Session, text: str) -> list[str]:
+        email = text.strip()
+        if not EMAIL_PATTERN.match(email):
+            antwort = "Das sieht nicht nach einer gueltigen E-Mail-Adresse aus. Wie lautet deine E-Mail-Adresse?"
+            session.add_display("bot", antwort)
+            return [antwort]
+        session.vermieter_email = email
+        session.vermieter_step = "password"
+        antwort = "Und jetzt noch ein Passwort fuer dein Konto (mindestens 8 Zeichen, mit Buchstabe und Ziffer)."
+        session.add_display("bot", antwort)
+        return [antwort]
+
+    def _handle_vermieter_password_step(self, session: Session, text: str) -> list[str]:
+        password = text.strip()
+        try:
+            firma = self._firma_service.signup(session.vermieter_name, session.vermieter_email, password)
+        except FirmaAuthError as exc:
+            if self._fehlerlog_repo is not None:
+                self._fehlerlog_repo.add("vermieter_signup", str(exc), telefonnummer=session.telefonnummer)
+            session.vermieter_step = "email"
+            session.vermieter_email = None
+            antwort = f"⚠️ {exc} Wie lautet deine E-Mail-Adresse?"
+            session.add_display("bot", antwort)
+            return [antwort]
+
+        self._firma_repo.link_phone(firma.id, session.telefonnummer)
         session.vermieter_firma_id = firma.id
-        return (
-            "Danke! Jetzt beschreib mir dein Inserat in einem Satz "
-            "(Titel, Zimmer, Ort, Kanton, Preis, Miete oder Kauf, Flaeche in m2)."
+        session.vermieter_step = "done"
+        antwort = (
+            f"✅ Konto erstellt! Du kannst dich mit {session.vermieter_email} auch "
+            f"auf wohnchat.ch/firma.html einloggen. {self.LISTING_PROMPT}"
         )
+        session.add_display("bot", antwort)
+        return [antwort]
 
     def _handle_listing_extraction(self, session: Session, text: str) -> list[str]:
         session.listing_messages.append({"role": "user", "content": text})
@@ -324,6 +564,8 @@ class ChatService:
         try:
             result = extract_listing(session.listing_messages)
         except IntentExtractionConfigError as exc:
+            if self._fehlerlog_repo is not None:
+                self._fehlerlog_repo.add("claude_api", str(exc), telefonnummer=session.telefonnummer)
             antwort = f"⚠️ {exc}"
             session.add_display("bot", antwort)
             return [antwort]
@@ -366,6 +608,9 @@ class ChatService:
     # -- Mieter ----------------------------------------------------------
 
     def _handle_mieter(self, session: Session, text: str) -> list[str]:
+        if session.pending_search_slot is not None:
+            return self._handle_pending_search_slot(session, text)
+
         if session.pending_criteria is not None:
             antwort = self._handle_pending_confirmation(session, text)
             session.add_display("bot", antwort)
@@ -382,6 +627,8 @@ class ChatService:
         try:
             result = extract_intent(session.claude_messages)
         except IntentExtractionConfigError as exc:
+            if self._fehlerlog_repo is not None:
+                self._fehlerlog_repo.add("claude_api", str(exc), telefonnummer=session.telefonnummer)
             antwort = f"⚠️ {exc}"
             session.add_display("bot", antwort)
             return [antwort]
@@ -393,7 +640,82 @@ class ChatService:
             session.add_display("bot", result.clarifying_question)
             return [result.clarifying_question]
 
-        criteria = result.criteria
+        session.partial_criteria = result.criteria
+        session.resolved_search_slots = set()
+        naechster_slot = self._next_missing_search_slot(session, result.criteria)
+        if naechster_slot is not None:
+            return self._ask_search_slot(session, naechster_slot)
+        return self._finish_search(session, result.criteria)
+
+    def _next_missing_search_slot(self, session: Session, criteria: SearchCriteria) -> Optional[str]:
+        """Ein Feld gilt nur dann als "noch offen", wenn es sowohl leer ist
+        ALS AUCH noch nicht beantwortet wurde - sonst liesse sich eine
+        Egal-Antwort (Feld bleibt None) nicht von "noch nicht gefragt"
+        unterscheiden, und die Frage wuerde sich endlos wiederholen."""
+        for slot, value in (
+            ("rooms", criteria.rooms),
+            ("property_type", criteria.property_type),
+            ("max_price", criteria.max_price),
+        ):
+            if value is None and slot not in session.resolved_search_slots:
+                return slot
+        return None
+
+    def _search_slot_question(self, session: Session, slot: str) -> str:
+        """Setzt session.pending_search_slot/pending_interactive und gibt
+        den Fragetext zurueck, OHNE ihn anzuzeigen - der Aufrufer entscheidet,
+        ob er ihn direkt oder mit einem Hinweis kombiniert anzeigt."""
+        session.pending_search_slot = slot
+        if slot == "rooms":
+            session.pending_interactive = InteractivePrompt("list", ROOMS_OPTIONS, "Zimmer waehlen")
+            return "Wie viele Zimmer suchst du mindestens?"
+        if slot == "property_type":
+            session.pending_interactive = InteractivePrompt("list", PROPERTY_TYPE_OPTIONS, "Objekttyp waehlen")
+            return "Welche Art von Objekt suchst du?"
+        session.pending_interactive = None
+        return "Bis zu welchem Preis pro Monat (CHF)? Antworte mit einer Zahl oder 'egal'."
+
+    def _ask_search_slot(self, session: Session, slot: str) -> list[str]:
+        antwort = self._search_slot_question(session, slot)
+        session.add_display("bot", antwort)
+        return [antwort]
+
+    def _handle_pending_search_slot(self, session: Session, text: str) -> list[str]:
+        slot = session.pending_search_slot
+        criteria = session.partial_criteria
+        if criteria is None:
+            # Sollte nicht vorkommen (z.B. Session-Verlust) - lieber robust
+            # neu einsteigen statt abzustuerzen.
+            session.pending_search_slot = None
+            return self._handle_mieter(session, text)
+
+        if slot == "rooms":
+            ok, value = _parse_rooms_answer(text)
+            if ok:
+                criteria.rooms = value
+        elif slot == "property_type":
+            ok, value = _parse_property_type_answer(text)
+            if ok:
+                criteria.property_type = value
+        else:
+            ok, value = _parse_price_answer(text)
+            if ok:
+                criteria.max_price = value
+
+        if not ok:
+            frage = self._search_slot_question(session, slot)
+            antwort = f"Das habe ich nicht verstanden. {frage}"
+            session.add_display("bot", antwort)
+            return [antwort]
+
+        session.pending_search_slot = None
+        session.resolved_search_slots.add(slot)
+        naechster_slot = self._next_missing_search_slot(session, criteria)
+        if naechster_slot is not None:
+            return self._ask_search_slot(session, naechster_slot)
+        return self._finish_search(session, criteria)
+
+    def _finish_search(self, session: Session, criteria: SearchCriteria) -> list[str]:
         treffer = self._matching_engine.search(criteria)
         treffer_text = _format_treffer(treffer)
         rueckfrage = (
@@ -405,6 +727,7 @@ class ChatService:
             {"role": "assistant", "content": f"{treffer_text}\n{rueckfrage}"}
         )
         session.pending_criteria = criteria
+        session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
 
         for nachricht in (treffer_text, rueckfrage):
             session.add_display("bot", nachricht)
@@ -436,6 +759,7 @@ class ChatService:
         if antwort in NEIN_WOERTER:
             session.pending_criteria = None
             return "Alles klar, kein Suchabo angelegt. Sag mir einfach, wenn du eine neue Suche starten willst."
+        session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
         return "Bitte antworte mit 'ja' oder 'nein' - moechtest du das Suchabo anlegen?"
 
     def _handle_pending_lead(self, session: Session, text: str) -> str:
@@ -454,4 +778,5 @@ class ChatService:
         if antwort in NEIN_WOERTER:
             session.pending_lead = None
             return "Alles klar, kein Interesse vermerkt."
+        session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
         return "Bitte antworte mit 'ja' oder 'nein' - hast du Interesse an diesem Inserat?"

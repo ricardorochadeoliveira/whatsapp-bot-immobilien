@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wohnchat.ch: Superadmin</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/img/logo-icon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/img/logo-icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/img/logo-icon-180.png">
+<link rel="stylesheet" href="/static/css/site.css?v=5">
+<style>
+  body { padding: 0; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: var(--space-3); }
+  .portal-header { border-bottom: 1px solid var(--color-border); background: var(--color-bg); }
+  .portal-header .container { max-width: 1040px; padding-top: var(--space-2); padding-bottom: var(--space-2); display: flex; align-items: center; }
+  .card { margin-bottom: var(--space-3); }
+  h2 { font-family: var(--font-body); font-weight: 500; font-size: 1.0625rem; color: var(--color-text); margin-bottom: var(--space-2); }
+  button { margin-top: 14px; padding: 9px 18px; border: none; border-radius: var(--radius); background: var(--color-primary); color: #fff; cursor: pointer; font-family: var(--font-body); font-size: 14px; }
+  button:hover { background: var(--color-primary-dark); }
+  button.secondary { background: var(--color-border); color: var(--color-text); margin-left: 8px; }
+  button.secondary:hover { background: #cfc6b4; }
+  button.danger { background: var(--color-error); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+  #dashboard { display: none; }
+  #authForms { display: block; }
+  #mfaLoginStep { display: none; }
+  #mfaEnrollDetails { display: none; margin-top: 10px; }
+  #mfaEnrollDetails img { display: block; margin-top: 8px; width: 180px; height: 180px; }
+  .mfa-active { color: var(--color-success); font-weight: 600; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .file-tree { list-style: none; margin: 10px 0 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--radius); }
+  .file-tree li { padding: 6px 10px; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--color-border); }
+  .file-tree li:last-child { border-bottom: none; }
+  .file-tree li:hover { background: var(--color-bg); }
+  .file-tree li.dir::before { content: "📁 "; }
+  .file-tree li.file::before { content: "📄 "; }
+  .editor-grid { display: grid; grid-template-columns: 240px 1fr; gap: var(--space-3); align-items: start; }
+  #editorContent { width: 100%; height: 420px; font-family: 'Courier New', monospace; font-size: 13px; white-space: pre; resize: vertical; }
+  .warn-banner { background: #FBF1E6; border: 1px solid var(--color-accent); border-radius: var(--radius); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); font-size: 13px; color: var(--color-text); }
+  .quelle-count { display: inline-block; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 12px; margin: 0 6px 6px 0; font-size: 12px; }
+  @media (max-width: 860px) { .editor-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<header class="portal-header">
+  <div class="container"><a class="wordmark" href="/" style="font-size:1.25rem;"><img class="wordmark-icon" src="/static/img/logo-icon-64.png" alt=""><span class="wordmark-text">wohnchat.ch</span></a></div>
+</header>
+
+<div class="wrap" id="authForms">
+  <h1 style="font-size:1.375rem;">Superadmin</h1>
+  <div class="card">
+    <h2>Login</h2>
+    <div id="loginStep">
+      <label>E-Mail <input id="login_email" type="email"></label>
+      <label>Passwort <input id="login_password" type="password"></label>
+      <button onclick="login()">Einloggen</button>
+    </div>
+    <div id="mfaLoginStep">
+      <label>6-stelliger Code aus der Authenticator-App <input id="mfa_login_code" inputmode="numeric" maxlength="6"></label>
+      <button onclick="submitMfaLogin()">Bestätigen</button>
+    </div>
+    <div id="loginError" class="error"></div>
+  </div>
+</div>
+
+<div class="portal-shell" id="dashboard">
+  <nav class="portal-sidebar">
+    <span class="wordmark" style="display:block;margin-bottom:var(--space-2);">Superadmin</span>
+    <button class="portal-nav-item active" onclick="showTab('tab-dashboard', this)">Dashboard</button>
+    <button class="portal-nav-item" onclick="showTab('tab-fehler', this)">Fehler-Protokoll</button>
+    <button class="portal-nav-item" onclick="showTab('tab-editor', this)">Code-Editor</button>
+    <button class="portal-nav-item" onclick="showTab('tab-sicherheit', this)">Sicherheit</button>
+    <div class="portal-nav-divider"></div>
+    <button class="portal-nav-item" onclick="logout()">Logout</button>
+  </nav>
+
+  <main class="portal-main">
+    <div class="tab-panel active" id="tab-dashboard">
+      <div class="card">
+        <div class="topbar" style="display:flex;justify-content:space-between;align-items:center;">
+          <h2 style="margin:0;">Bot-Statistiken</h2>
+          <button class="secondary" onclick="loadStats()">Aktualisieren</button>
+        </div>
+        <div class="stat-grid" id="statGrid" style="margin-top:var(--space-2);"></div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-fehler">
+      <div class="card">
+        <div class="topbar" style="display:flex;justify-content:space-between;align-items:center;">
+          <h2 style="margin:0;">Fehler-Protokoll</h2>
+          <button class="secondary" onclick="loadFehler()">Aktualisieren</button>
+        </div>
+        <div id="fehlerSummary" style="margin-top:var(--space-2);"></div>
+        <table id="fehlerTable">
+          <thead><tr><th>Zeitpunkt</th><th>Quelle</th><th>Telefonnummer</th><th>Meldung</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-editor">
+      <div class="card">
+        <h2>Code-Editor</h2>
+        <div class="warn-banner">⚠️ Änderungen hier gehen über einen echten Git-Commit direkt live, sobald Railway deployed hat. Kein Diff-Review, keine automatischen Tests.</div>
+        <div class="editor-grid">
+          <div>
+            <label>Ordner <input id="editorPath" value=""></label>
+            <button class="secondary" onclick="loadFileList()">Ordner anzeigen</button>
+            <ul class="file-tree" id="fileTree"></ul>
+          </div>
+          <div>
+            <div id="editorFilePath" class="hint"></div>
+            <textarea id="editorContent" spellcheck="false" disabled placeholder="Datei aus der Liste links öffnen..."></textarea>
+            <label>Commit-Message <input id="editorCommitMessage" placeholder="z.B. Bot-Text angepasst"></label>
+            <button id="editorSaveBtn" onclick="saveFile()" disabled>Speichern</button>
+            <div id="editorError" class="error"></div>
+            <div id="editorInfo" class="info"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-sicherheit">
+      <div class="card">
+        <h2>Zwei-Faktor-Authentifizierung</h2>
+        <div class="hint">Angesichts der Reichweite des Code-Editors dringend empfohlen.</div>
+        <div id="mfaStatus">Status: <span id="mfaStatusText">im Browser nicht direkt einsehbar - falls schon aktiviert, wird beim nächsten Login der Code abgefragt.</span></div>
+        <button id="mfaEnrollBtn" class="secondary" onclick="startMfaEnroll()">Aktivieren</button>
+        <div id="mfaEnrollDetails">
+          <div class="hint">QR-Code mit einer Authenticator-App scannen, oder den Code manuell eintragen: <strong id="mfaSecret"></strong></div>
+          <img id="mfaQrCode" alt="QR-Code für 2FA">
+          <label>6-stelliger Code aus der App <input id="mfa_activate_code" inputmode="numeric" maxlength="6"></label>
+          <button onclick="activateMfa()">Bestätigen</button>
+        </div>
+        <div id="mfaError" class="error"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+let pendingMfaToken = null;
+let pendingMfaFactorId = null;
+let currentFile = null; // {path, sha}
+
+async function authFetch(url, options) {
+  options = options || {};
+  options.credentials = 'same-origin';
+  return fetch(url, options);
+}
+
+function showTab(id, btn) {
+  document.querySelectorAll('.tab-panel').forEach(el => el.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('.portal-nav-item').forEach(el => el.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  if (id === 'tab-dashboard') loadStats();
+  if (id === 'tab-fehler') loadFehler();
+}
+
+async function login() {
+  const email = document.getElementById('login_email').value;
+  const password = document.getElementById('login_password').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  const res = await fetch('/api/superadmin/login', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin',
+    body: JSON.stringify({email, password})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Login fehlgeschlagen.'; return; }
+  if (data.mfa_required) {
+    pendingMfaToken = data.pending_token;
+    pendingMfaFactorId = data.factor_id;
+    document.getElementById('loginStep').style.display = 'none';
+    document.getElementById('mfaLoginStep').style.display = 'block';
+    return;
+  }
+  showDashboard();
+}
+
+async function submitMfaLogin() {
+  const code = document.getElementById('mfa_login_code').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  const res = await fetch('/api/superadmin/login/mfa', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'same-origin',
+    body: JSON.stringify({pending_token: pendingMfaToken, factor_id: pendingMfaFactorId, code})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Code ungültig.'; return; }
+  pendingMfaToken = null; pendingMfaFactorId = null;
+  showDashboard();
+}
+
+async function logout() {
+  await fetch('/api/superadmin/logout', {method: 'POST', credentials: 'same-origin'});
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('authForms').style.display = 'block';
+}
+
+async function showDashboard() {
+  document.getElementById('authForms').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'grid';
+  await loadStats();
+}
+
+function statTile(label, value) {
+  const div = document.createElement('div');
+  div.className = 'stat-tile';
+  div.innerHTML = `<div class="label"></div><div class="value"></div>`;
+  div.querySelector('.label').textContent = label;
+  div.querySelector('.value').textContent = value;
+  return div;
+}
+
+async function loadStats() {
+  const res = await authFetch('/api/superadmin/stats');
+  if (!res.ok) return;
+  const s = await res.json();
+  const grid = document.getElementById('statGrid');
+  grid.innerHTML = '';
+  grid.appendChild(statTile('Kontakte insgesamt', s.gesamt_kontakte));
+  grid.appendChild(statTile('Aktiv jetzt (5 Min.)', s.aktive_jetzt));
+  grid.appendChild(statTile('Aktiv heute (24 Std.)', s.aktive_heute));
+  grid.appendChild(statTile('Firmen', s.gesamt_firmen));
+  grid.appendChild(statTile('Aktive Inserate', s.aktive_inserate));
+  grid.appendChild(statTile('Fehler (24 Std.)', s.fehler_24h));
+}
+
+async function loadFehler() {
+  const res = await authFetch('/api/superadmin/fehler?limit=200');
+  if (!res.ok) return;
+  const items = await res.json();
+
+  const counts = {};
+  for (const f of items) counts[f.quelle] = (counts[f.quelle] || 0) + 1;
+  const summaryEl = document.getElementById('fehlerSummary');
+  summaryEl.innerHTML = '';
+  for (const [quelle, count] of Object.entries(counts)) {
+    const span = document.createElement('span');
+    span.className = 'quelle-count';
+    span.textContent = `${quelle}: ${count}`;
+    summaryEl.appendChild(span);
+  }
+  if (items.length === 0) summaryEl.textContent = 'Keine Fehler protokolliert.';
+
+  const tbody = document.querySelector('#fehlerTable tbody');
+  tbody.innerHTML = '';
+  for (const f of items) {
+    const tr = document.createElement('tr');
+    for (const val of [f.erstellt_am, f.quelle, f.telefonnummer || '-', f.meldung]) {
+      const td = document.createElement('td');
+      td.textContent = val;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadFileList() {
+  const path = document.getElementById('editorPath').value;
+  const errEl = document.getElementById('editorError');
+  errEl.textContent = '';
+  const res = await authFetch('/api/superadmin/files?path=' + encodeURIComponent(path));
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Laden.'; return; }
+  const tree = document.getElementById('fileTree');
+  tree.innerHTML = '';
+  if (path) {
+    const up = document.createElement('li');
+    up.className = 'dir';
+    up.textContent = '.. (nach oben)';
+    up.onclick = () => { document.getElementById('editorPath').value = path.split('/').slice(0, -1).join('/'); loadFileList(); };
+    tree.appendChild(up);
+  }
+  for (const entry of data.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1))) {
+    const li = document.createElement('li');
+    li.className = entry.type === 'dir' ? 'dir' : 'file';
+    li.textContent = entry.name;
+    li.onclick = () => {
+      if (entry.type === 'dir') {
+        document.getElementById('editorPath').value = entry.path;
+        loadFileList();
+      } else {
+        openFile(entry.path);
+      }
+    };
+    tree.appendChild(li);
+  }
+}
+
+async function openFile(path) {
+  const errEl = document.getElementById('editorError');
+  const infoEl = document.getElementById('editorInfo');
+  errEl.textContent = ''; infoEl.textContent = '';
+  const res = await authFetch('/api/superadmin/files/content?path=' + encodeURIComponent(path));
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Laden.'; return; }
+  currentFile = {path: data.path, sha: data.sha};
+  document.getElementById('editorFilePath').textContent = data.path;
+  const textarea = document.getElementById('editorContent');
+  textarea.value = data.content;
+  textarea.disabled = false;
+  document.getElementById('editorSaveBtn').disabled = false;
+}
+
+async function saveFile() {
+  const errEl = document.getElementById('editorError');
+  const infoEl = document.getElementById('editorInfo');
+  errEl.textContent = ''; infoEl.textContent = '';
+  if (!currentFile) return;
+  const commitMessage = document.getElementById('editorCommitMessage').value.trim();
+  if (!commitMessage) { errEl.textContent = 'Commit-Message ist Pflicht.'; return; }
+  if (!confirm('Das geht sofort live, sobald Railway deployed hat. Fortfahren?')) return;
+
+  const res = await authFetch('/api/superadmin/files/content', {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      path: currentFile.path,
+      content: document.getElementById('editorContent').value,
+      sha: currentFile.sha,
+      commit_message: commitMessage
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Speichern.'; return; }
+  currentFile.sha = data.sha;
+  infoEl.textContent = 'Gespeichert und committet. Railway deployt jetzt automatisch.';
+}
+
+async function loadMfaStatus() {
+  document.getElementById('mfaStatusText').textContent = 'im Browser nicht direkt einsehbar - falls schon aktiviert, wird beim nächsten Login der Code abgefragt.';
+}
+
+async function startMfaEnroll() {
+  const errEl = document.getElementById('mfaError');
+  errEl.textContent = '';
+  const res = await authFetch('/api/superadmin/mfa/enroll', {method: 'POST'});
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Starten der 2FA-Einrichtung.'; return; }
+  pendingMfaFactorId = data.factor_id;
+  document.getElementById('mfaQrCode').src = data.qr_code;
+  document.getElementById('mfaSecret').textContent = data.secret;
+  document.getElementById('mfaEnrollDetails').style.display = 'block';
+  document.getElementById('mfaEnrollBtn').style.display = 'none';
+}
+
+async function activateMfa() {
+  const code = document.getElementById('mfa_activate_code').value;
+  const errEl = document.getElementById('mfaError');
+  errEl.textContent = '';
+  const res = await authFetch('/api/superadmin/mfa/activate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({factor_id: pendingMfaFactorId, code})
+  });
+  const data = await res.json();
+  if (!res.ok) { errEl.textContent = data.detail || 'Code ungültig.'; return; }
+  document.getElementById('mfaEnrollDetails').style.display = 'none';
+  document.getElementById('mfaStatusText').textContent = 'aktiv ✓';
+  document.getElementById('mfaStatusText').className = 'mfa-active';
+}
+
+(async function init() {
+  const res = await authFetch('/api/superadmin/me');
+  if (res.ok) showDashboard();
+})();
+</script>
+</body>
+</html>

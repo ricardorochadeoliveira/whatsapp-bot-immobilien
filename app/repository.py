@@ -8,9 +8,10 @@ Interfaces geschrieben - der Rest der Anwendung bleibt unveraendert.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from typing import Optional
 
-from app.models import Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
+from app.models import ChatKontakt, FehlerLog, Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
 
 
 class FirmaRepository(ABC):
@@ -28,6 +29,12 @@ class FirmaRepository(ABC):
 
     @abstractmethod
     def get_or_create_by_phone(self, telefonnummer: str, name: str, typ: str) -> Firma: ...
+
+    @abstractmethod
+    def get_by_phone(self, telefonnummer: str) -> Optional[Firma]: ...
+
+    @abstractmethod
+    def link_phone(self, firma_id: str, telefonnummer: str) -> None: ...
 
     @abstractmethod
     def get_all(self) -> list[Firma]: ...
@@ -96,6 +103,25 @@ class LeadRepository(ABC):
     def get_by_firma(self, firma_id: str) -> list[Lead]: ...
 
 
+class ChatKontaktRepository(ABC):
+    @abstractmethod
+    def record_activity(self, telefonnummer: str) -> None: ...
+
+    @abstractmethod
+    def count_all(self) -> int: ...
+
+    @abstractmethod
+    def count_active_since(self, seit: datetime) -> int: ...
+
+
+class FehlerLogRepository(ABC):
+    @abstractmethod
+    def add(self, quelle: str, meldung: str, telefonnummer: Optional[str] = None) -> FehlerLog: ...
+
+    @abstractmethod
+    def get_recent(self, limit: int = 200) -> list[FehlerLog]: ...
+
+
 # ---------------------------------------------------------------------------
 # In-Memory-Implementierungen (Platzhalter, solange Punkt 1/2 on hold sind)
 # ---------------------------------------------------------------------------
@@ -127,6 +153,14 @@ class InMemoryFirmaRepository(FirmaRepository):
         firma = Firma(name=name, typ=typ, telefonnummer=telefonnummer)
         self._items[firma.id] = firma
         return firma
+
+    def get_by_phone(self, telefonnummer: str) -> Optional[Firma]:
+        return next((f for f in self._items.values() if f.telefonnummer == telefonnummer), None)
+
+    def link_phone(self, firma_id: str, telefonnummer: str) -> None:
+        firma = self._items.get(firma_id)
+        if firma is not None:
+            self._items[firma_id] = firma.model_copy(update={"telefonnummer": telefonnummer})
 
     def get_all(self) -> list[Firma]:
         return list(self._items.values())
@@ -222,3 +256,36 @@ class InMemoryLeadRepository(LeadRepository):
 
     def get_by_firma(self, firma_id: str) -> list[Lead]:
         return [l for l in self._items if l.firma_id == firma_id]
+
+
+class InMemoryChatKontaktRepository(ChatKontaktRepository):
+    def __init__(self):
+        self._by_phone: dict[str, ChatKontakt] = {}
+
+    def record_activity(self, telefonnummer: str) -> None:
+        bestehend = self._by_phone.get(telefonnummer)
+        if bestehend is None:
+            self._by_phone[telefonnummer] = ChatKontakt(telefonnummer=telefonnummer)
+        else:
+            self._by_phone[telefonnummer] = bestehend.model_copy(
+                update={"letzte_aktivitaet_am": datetime.now(timezone.utc)}
+            )
+
+    def count_all(self) -> int:
+        return len(self._by_phone)
+
+    def count_active_since(self, seit: datetime) -> int:
+        return sum(1 for k in self._by_phone.values() if k.letzte_aktivitaet_am >= seit)
+
+
+class InMemoryFehlerLogRepository(FehlerLogRepository):
+    def __init__(self):
+        self._items: list[FehlerLog] = []
+
+    def add(self, quelle: str, meldung: str, telefonnummer: Optional[str] = None) -> FehlerLog:
+        eintrag = FehlerLog(quelle=quelle, meldung=meldung, telefonnummer=telefonnummer)
+        self._items.append(eintrag)
+        return eintrag
+
+    def get_recent(self, limit: int = 200) -> list[FehlerLog]:
+        return list(reversed(self._items[-limit:]))

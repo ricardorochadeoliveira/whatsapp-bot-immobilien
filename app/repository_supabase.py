@@ -12,14 +12,17 @@ Matching-Job), kein tenant-gebundener Zugriff einer eingeloggten Firma.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.db import tenant_session
-from app.models import Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
+from app.models import ChatKontakt, FehlerLog, Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
 from app.models_orm import (
+    ChatKontaktORM,
+    FehlerLogORM,
     FirmaORM,
     ImmobilieORM,
     KundeORM,
@@ -28,6 +31,8 @@ from app.models_orm import (
     SuchprofilORM,
 )
 from app.repository import (
+    ChatKontaktRepository,
+    FehlerLogRepository,
     FirmaRepository,
     ImmobilienRepository,
     KundenRepository,
@@ -157,6 +162,21 @@ class SupabaseFirmaRepository(FirmaRepository):
             session.add(row)
             session.commit()
             return firma
+
+    def get_by_phone(self, telefonnummer: str) -> Optional[Firma]:
+        with self._admin_session_factory() as session:
+            row = session.scalar(select(FirmaORM).where(FirmaORM.telefonnummer == telefonnummer))
+            return _firma_from_orm(row) if row else None
+
+    def link_phone(self, firma_id: str, telefonnummer: str) -> None:
+        """Stempelt telefonnummer auf eine per Chat-Signup neu erstellte Firma
+        (hat bis dahin nur auth_user_id/email) - laeuft wie get_or_create_by_phone
+        ueber die Superuser-Verbindung, kein RLS-Kontext im WhatsApp-Flow."""
+        with self._admin_session_factory() as session:
+            row = session.get(FirmaORM, firma_id)
+            if row is not None:
+                row.telefonnummer = telefonnummer
+                session.commit()
 
     def get_all(self) -> list[Firma]:
         with self._admin_session_factory() as session:
@@ -308,3 +328,60 @@ class SupabaseLeadRepository(LeadRepository):
         with self._session_factory() as session:
             rows = session.scalars(select(LeadORM).where(LeadORM.firma_id == firma_id)).all()
             return [_lead_from_orm(r) for r in rows]
+
+
+class SupabaseChatKontaktRepository(ChatKontaktRepository):
+    def __init__(self, session_factory: sessionmaker):
+        self._session_factory = session_factory
+
+    def record_activity(self, telefonnummer: str) -> None:
+        now = datetime.now(timezone.utc)
+        with self._session_factory() as session:
+            row = session.scalar(
+                select(ChatKontaktORM).where(ChatKontaktORM.telefonnummer == telefonnummer)
+            )
+            if row is None:
+                kontakt = ChatKontakt(telefonnummer=telefonnummer)
+                session.add(ChatKontaktORM(**kontakt.model_dump()))
+            else:
+                row.letzte_aktivitaet_am = now
+            session.commit()
+
+    def count_all(self) -> int:
+        with self._session_factory() as session:
+            return len(session.scalars(select(ChatKontaktORM)).all())
+
+    def count_active_since(self, seit: datetime) -> int:
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(ChatKontaktORM).where(ChatKontaktORM.letzte_aktivitaet_am >= seit)
+            ).all()
+            return len(rows)
+
+
+class SupabaseFehlerLogRepository(FehlerLogRepository):
+    def __init__(self, session_factory: sessionmaker):
+        self._session_factory = session_factory
+
+    def add(self, quelle: str, meldung: str, telefonnummer: Optional[str] = None) -> FehlerLog:
+        eintrag = FehlerLog(quelle=quelle, meldung=meldung, telefonnummer=telefonnummer)
+        with self._session_factory() as session:
+            session.add(FehlerLogORM(**eintrag.model_dump()))
+            session.commit()
+        return eintrag
+
+    def get_recent(self, limit: int = 200) -> list[FehlerLog]:
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(FehlerLogORM).order_by(FehlerLogORM.erstellt_am.desc()).limit(limit)
+            ).all()
+            return [
+                FehlerLog(
+                    id=r.id,
+                    quelle=r.quelle,
+                    meldung=r.meldung,
+                    telefonnummer=r.telefonnummer,
+                    erstellt_am=r.erstellt_am,
+                )
+                for r in rows
+            ]

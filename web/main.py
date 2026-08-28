@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -18,15 +19,24 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from app.bootstrap import context  # noqa: E402  (nach load_dotenv)
+from app import github_editor  # noqa: E402
+from app import superadmin_auth  # noqa: E402
 from app.firma_service import FirmaAuthError  # noqa: E402
+from app.github_editor import GithubEditorConflictError, GithubEditorError  # noqa: E402
 from app.image_storage import ImageUploadError, upload_image  # noqa: E402
 from app.meta_whatsapp import (  # noqa: E402
     parse_incoming_messages,
+    send_button_message,
+    send_list_message,
     send_text_message,
     verify_webhook_signature,
 )
 from app.models import Firma, Immobilie, Lead  # noqa: E402
+from app.superadmin_auth import SuperadminAuthError  # noqa: E402
 from app.supabase_auth import sign_out  # noqa: E402
+from app.webhook_dedup import SeenMessageIds  # noqa: E402
+
+_seen_message_ids = SeenMessageIds()
 
 MAX_BILDER_PRO_INSERAT = 6
 
@@ -98,6 +108,14 @@ def firma_portal():
     return FileResponse(str(STATIC_DIR / "firma.html"))
 
 
+@app.get("/superadmin")
+def superadmin_panel():
+    # Unprotected wie /admin/firma - liefert nur HTML aus, der eigentliche
+    # Schutz laeuft ueber die superadmin_session-Cookie-gesicherten API-Calls,
+    # die die Seite selbst macht.
+    return FileResponse(str(STATIC_DIR / "superadmin.html"))
+
+
 @app.get("/admin")
 def admin_panel():
     # Verschoben von "/" - die Startseite ist jetzt die oeffentliche
@@ -128,21 +146,48 @@ def verify_whatsapp_webhook(request: Request):
     raise HTTPException(status_code=403, detail="Webhook-Verifikation fehlgeschlagen.")
 
 
+def _process_message(telefonnummer: str, text: str) -> None:
+    antworten = context.chat_service.handle_message(telefonnummer, text)
+    # Wartet gerade eine Button-/Listen-Frage auf Antwort (siehe
+    # app/chat_service.py: InteractivePrompt)? Dann geht die LETZTE
+    # Antwort in der Liste als interaktive Nachricht raus statt als Text -
+    # das ist bei jeder aktuellen Verwendung auch die eigentliche Frage.
+    prompt = context.chat_service.get_session(telefonnummer).pending_interactive
+    letzter_index = len(antworten) - 1
+    for index, antwort in enumerate(antworten):
+        try:
+            if prompt is not None and index == letzter_index:
+                if prompt.kind == "button":
+                    send_button_message(telefonnummer, antwort, prompt.options)
+                else:
+                    send_list_message(
+                        telefonnummer, antwort, prompt.list_button_label or "Auswaehlen", prompt.options
+                    )
+            else:
+                send_text_message(telefonnummer, antwort)
+        except Exception as exc:
+            logger.exception("Antwort an %s konnte nicht gesendet werden", telefonnummer)
+            context.fehlerlog_repo.add("whatsapp_send", str(exc), telefonnummer=telefonnummer)
+
+
 @app.post("/webhook/whatsapp")
-async def receive_whatsapp_webhook(request: Request):
+async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not verify_webhook_signature(body, signature):
         raise HTTPException(status_code=401, detail="Ungueltige Signatur.")
 
     payload = await request.json()
-    for telefonnummer, text in parse_incoming_messages(payload):
-        antworten = context.chat_service.handle_message(telefonnummer, text)
-        for antwort in antworten:
-            try:
-                send_text_message(telefonnummer, antwort)
-            except Exception:
-                logger.exception("Antwort an %s konnte nicht gesendet werden", telefonnummer)
+    # Antwort so schnell wie moeglich bestaetigen (Verarbeitung laeuft als
+    # Background-Task NACH dem Senden der Response) - sonst liefert Meta bei
+    # einem langsamen Claude-/Sende-Aufruf denselben Webhook-Event erneut
+    # aus. message_id-Dedup faengt zusaetzlich Zustellungen ab, die trotzdem
+    # doppelt ankommen (z.B. Netzwerkprobleme auf Metas Seite).
+    for telefonnummer, text, message_id in parse_incoming_messages(payload):
+        if message_id and not _seen_message_ids.mark_seen(message_id):
+            logger.info("Doppelte Webhook-Zustellung ignoriert: %s", message_id)
+            continue
+        background_tasks.add_task(_process_message, telefonnummer, text)
 
     return {"ok": True}
 
@@ -414,8 +459,10 @@ def firma_password_forgot(req: FirmaPasswordForgotRequest, request: Request):
     redirect_to = f"{request.url.scheme}://{request.url.netloc}/firma"
     try:
         service.request_password_reset(req.email, redirect_to=redirect_to)
-    except FirmaAuthError:
-        pass  # Betriebsfehler (z.B. Supabase-Rate-Limit) nicht an den Client durchreichen
+    except FirmaAuthError as exc:
+        # Betriebsfehler (z.B. Supabase-Rate-Limit) nicht an den Client
+        # durchreichen (Anti-Enumeration) - aber fuers Fehler-Protokoll merken.
+        context.fehlerlog_repo.add("firma_password_forgot", str(exc))
     # Immer dieselbe generische Antwort - egal ob die E-Mail existiert oder
     # der Versand geklappt hat (kein Account-Enumeration-Signal).
     return {"ok": True, "detail": "Falls ein Konto mit dieser E-Mail existiert, wurde eine E-Mail mit einem Link zum Zuruecksetzen verschickt."}
@@ -606,3 +653,193 @@ def firma_remove_bild(immobilie_id: str, url: str, firma: Firma = Depends(get_cu
 @app.get("/api/firma/leads", response_model=list[Lead])
 def firma_list_leads(firma: Firma = Depends(get_current_firma)):
     return context.firma_service.list_leads(firma)
+
+
+# ---------------------------------------------------------------------------
+# Superadmin-Bereich: eigener Login (Supabase Auth + E-Mail-Allowlist, siehe
+# app/superadmin_auth.py), Bot-Statistiken, Fehler-Protokoll, Code-Editor
+# (GitHub Contents API, siehe app/github_editor.py).
+# ---------------------------------------------------------------------------
+
+SUPERADMIN_COOKIE_NAME = "superadmin_session"
+
+
+def _set_superadmin_cookie(response: Response, request: Request, access_token: str) -> None:
+    response.set_cookie(
+        SUPERADMIN_COOKIE_NAME,
+        access_token,
+        httponly=True,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+        max_age=60 * 60 * 24 * 7,
+        path="/",
+    )
+
+
+def get_current_superadmin(superadmin_session: str = Cookie(default="")) -> str:
+    if not superadmin_session:
+        raise HTTPException(status_code=401, detail="Nicht eingeloggt.")
+    try:
+        return superadmin_auth.verify_session(superadmin_session)
+    except SuperadminAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+SUPERADMIN_PROTECTED = [Depends(get_current_superadmin)]
+
+
+class SuperadminLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SuperadminLoginResponse(BaseModel):
+    email: Optional[str] = None
+    mfa_required: bool = False
+    factor_id: Optional[str] = None
+    pending_token: Optional[str] = None
+
+
+class SuperadminMfaLoginRequest(BaseModel):
+    pending_token: str
+    factor_id: str
+    code: str
+
+
+class SuperadminMfaActivateRequest(BaseModel):
+    factor_id: str
+    code: str
+
+
+def _check_superadmin_rate_limit(email: str, request: Request) -> None:
+    key = f"{email.strip().lower()}|{request.client.host if request.client else 'unknown'}"
+    if not context.superadmin_rate_limiter.allow(key):
+        raise HTTPException(
+            status_code=429, detail="Zu viele Versuche. Bitte warte kurz und versuche es erneut."
+        )
+
+
+@app.post("/api/superadmin/login", response_model=SuperadminLoginResponse)
+def superadmin_login(req: SuperadminLoginRequest, request: Request, response: Response):
+    _check_superadmin_rate_limit(req.email, request)
+    try:
+        result = superadmin_auth.login(req.email, req.password)
+    except SuperadminAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    if result.mfa_required:
+        return SuperadminLoginResponse(
+            mfa_required=True, factor_id=result.factor_id, pending_token=result.pending_token
+        )
+    _set_superadmin_cookie(response, request, result.access_token)
+    return SuperadminLoginResponse(email=result.email)
+
+
+@app.post("/api/superadmin/login/mfa", response_model=SuperadminLoginResponse)
+def superadmin_login_mfa(req: SuperadminMfaLoginRequest, request: Request, response: Response):
+    try:
+        result = superadmin_auth.verify_login_mfa(req.pending_token, req.factor_id, req.code)
+    except SuperadminAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    _set_superadmin_cookie(response, request, result.access_token)
+    return SuperadminLoginResponse(email=result.email)
+
+
+@app.post("/api/superadmin/logout")
+def superadmin_logout(response: Response, superadmin_session: str = Cookie(default="")):
+    if superadmin_session:
+        sign_out(superadmin_session)
+    response.delete_cookie(SUPERADMIN_COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/superadmin/me")
+def superadmin_me(email: str = Depends(get_current_superadmin)):
+    return {"email": email}
+
+
+@app.post("/api/superadmin/mfa/enroll", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_mfa_enroll(superadmin_session: str = Cookie(default="")):
+    try:
+        data = superadmin_auth.enroll_mfa(superadmin_session)
+    except SuperadminAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    totp = data.get("totp") or {}
+    return {"factor_id": data.get("id"), "qr_code": totp.get("qr_code"), "secret": totp.get("secret")}
+
+
+@app.post("/api/superadmin/mfa/activate")
+def superadmin_mfa_activate(
+    req: SuperadminMfaActivateRequest,
+    request: Request,
+    response: Response,
+    superadmin_session: str = Cookie(default=""),
+    email: str = Depends(get_current_superadmin),
+):
+    try:
+        new_token = superadmin_auth.activate_mfa(superadmin_session, req.factor_id, req.code)
+    except SuperadminAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _set_superadmin_cookie(response, request, new_token)
+    return {"ok": True}
+
+
+@app.get("/api/superadmin/stats", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_stats() -> dict:
+    now = datetime.now(timezone.utc)
+    fehler = context.fehlerlog_repo.get_recent(500)
+    fehler_24h = sum(1 for f in fehler if f.erstellt_am >= now - timedelta(hours=24))
+    return {
+        "gesamt_kontakte": context.chatkontakt_repo.count_all(),
+        "aktive_jetzt": context.chatkontakt_repo.count_active_since(now - timedelta(minutes=5)),
+        "aktive_heute": context.chatkontakt_repo.count_active_since(now - timedelta(hours=24)),
+        "gesamt_firmen": len(context.firma_repo.get_all()),
+        "aktive_inserate": len(context.immobilien_repo.get_by_status("aktiv")),
+        "fehler_24h": fehler_24h,
+    }
+
+
+@app.get("/api/superadmin/fehler", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_fehler(limit: int = 200) -> list[dict]:
+    return [
+        {
+            "quelle": f.quelle,
+            "meldung": f.meldung,
+            "telefonnummer": f.telefonnummer,
+            "erstellt_am": f.erstellt_am.isoformat(),
+        }
+        for f in context.fehlerlog_repo.get_recent(limit)
+    ]
+
+
+@app.get("/api/superadmin/files", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_list_files(path: str = "") -> list[dict]:
+    try:
+        return github_editor.list_directory(path)
+    except GithubEditorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/superadmin/files/content", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_get_file(path: str) -> dict:
+    try:
+        return github_editor.get_file(path)
+    except GithubEditorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class SuperadminFileWriteRequest(BaseModel):
+    path: str
+    content: str
+    sha: str
+    commit_message: str
+
+
+@app.put("/api/superadmin/files/content", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_write_file(req: SuperadminFileWriteRequest) -> dict:
+    try:
+        return github_editor.update_file(req.path, req.content, req.sha, req.commit_message)
+    except GithubEditorConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GithubEditorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
