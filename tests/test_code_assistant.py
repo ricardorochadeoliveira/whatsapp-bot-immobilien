@@ -103,6 +103,29 @@ def test_send_message_writes_file_and_reports_push_allowed(monkeypatch):
     assert result["push_allowed"] is True
 
 
+def test_send_message_result_has_all_keys_the_api_response_model_requires(monkeypatch):
+    # Regression: send_message() muss "display_messages" mitliefern - fehlte
+    # anfangs, was web/main.py's SuperadminChatSendResponse(**result) mit
+    # einem 500 (Response-Validierungsfehler) crashen liess, unbemerkt von
+    # den anderen Tests hier, die nur einzelne Felder pruefen.
+    _set_github_env(monkeypatch)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    fake_client = _FakeClient([_response([_text("Hallo!")])])
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
+
+    result = code_assistant.send_message("Hi.")
+
+    assert set(result.keys()) == {
+        "reply",
+        "display_messages",
+        "diff",
+        "files_changed",
+        "push_allowed",
+        "test_output",
+    }
+    assert result["display_messages"] == [{"role": "user", "text": "Hi."}, {"role": "assistant", "text": "Hallo!"}]
+
+
 def test_send_message_without_code_changes_needs_no_tests(monkeypatch):
     _set_github_env(monkeypatch)
     _patch_tarball_fetch(monkeypatch, _default_tarball())

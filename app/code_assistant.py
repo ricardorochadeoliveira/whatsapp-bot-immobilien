@@ -482,6 +482,7 @@ def send_message(text: str) -> dict:
         diff_text, files_changed = _compute_diff()
         return {
             "reply": reply,
+            "display_messages": list(_chat.display_messages),
             "diff": diff_text,
             "files_changed": files_changed,
             "push_allowed": bool(_chat.tests_green and not _chat.dirty and files_changed),
