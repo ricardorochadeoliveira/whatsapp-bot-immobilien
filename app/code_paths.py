@@ -1,12 +1,11 @@
-"""Pfad-Sicherheits-Leitplanken, geteilt zwischen dem manuellen Code-Editor
-(app/github_editor.py) und dem KI-Code-Assistenten (app/code_assistant.py) -
-EIN Ort fuer diese sicherheitsrelevante Logik statt zwei Implementierungen,
-die auseinanderlaufen koennten.
+"""Pfad-Sicherheits-Leitplanken fuer den Entwickler-Chat (app/code_assistant.py):
+nur app/, web/, tests/, docs/ sind sichtbar/schreibbar, nichts mit '.env' im
+Namen, nichts unter '.git/', keine '..'-Traversal.
 
-validate_path() ist eine reine String-Pruefung (kein Dateisystemzugriff) -
-reicht fuer den manuellen Editor, der nur die GitHub-API anspricht.
-resolve_within() ist zusaetzlich fuer den Assistenten noetig, der tatsaechlich
-in einem echten Tempordner auf der Festplatte liest/schreibt: eine reine
+validate_path() ist eine reine String-Pruefung (kein Dateisystemzugriff).
+resolve_within() prueft zusaetzlich auf Dateisystem-Ebene, dass ein Pfad
+tatsaechlich unter einem gegebenen Tempordner bleibt (noetig, weil der
+Entwickler-Chat echte Dateien auf der Festplatte liest/schreibt) - eine reine
 String-Pruefung wuerde weder absolute Pfade noch ein Entkommen aus dem
 Tempordner per Symlink/`..`-Aufloesung verhindern.
 """

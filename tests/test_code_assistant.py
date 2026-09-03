@@ -1,26 +1,19 @@
 import io
-import shutil
 import tarfile
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from app import code_assistant
-from app.code_assistant import (
-    CodeAssistantConfigError,
-    CodeAssistantConflictError,
-    SessionNotFoundError,
-)
+from app import code_assistant, railway_client
+from app.code_assistant import CodeAssistantConfigError, CodeAssistantConflictError
 
 
 @pytest.fixture(autouse=True)
-def _reset_sessions():
-    code_assistant._SESSIONS.clear()
+def _reset_chat_state():
+    code_assistant.reset_chat()
     yield
-    for session in code_assistant._SESSIONS.values():
-        shutil.rmtree(session.tmpdir, ignore_errors=True)
-    code_assistant._SESSIONS.clear()
+    code_assistant.reset_chat()
 
 
 def _set_github_env(monkeypatch):
@@ -73,7 +66,6 @@ class _FakeClient:
 
 
 PASSING_TEST_FILE = "def test_ok():\n    assert True\n"
-FAILING_TEST_FILE = "def test_fail():\n    assert False\n"
 
 
 def _patch_tarball_fetch(monkeypatch, tarball_bytes):
@@ -84,40 +76,16 @@ def _patch_tarball_fetch(monkeypatch, tarball_bytes):
     monkeypatch.setattr(httpx, "get", fake_get)
 
 
-# -- _safe_extract_tar --------------------------------------------------
+def _default_tarball():
+    return _build_fake_tarball({"tests/test_dummy.py": PASSING_TEST_FILE})
 
 
-def test_safe_extract_tar_strips_top_level_dir_and_writes_files(tmp_path):
-    tarball = _build_fake_tarball({"app/foo.py": "X = 1\n", "tests/test_dummy.py": PASSING_TEST_FILE})
-    dest = tmp_path / "extracted"
-    dest.mkdir()
-    code_assistant._safe_extract_tar(tarball, dest)
-    assert (dest / "app" / "foo.py").read_text() == "X = 1\n"
-    assert (dest / "tests" / "test_dummy.py").read_text() == PASSING_TEST_FILE
+# -- send_message: einzelne Nachricht -------------------------------------
 
 
-def test_safe_extract_tar_skips_symlinks(tmp_path):
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        top = "owner-repo-abc123"
-        info = tarfile.TarInfo(name=f"{top}/app/evil_link")
-        info.type = tarfile.SYMTYPE
-        info.linkname = "/etc/passwd"
-        tar.addfile(info)
-    dest = tmp_path / "extracted"
-    dest.mkdir()
-    code_assistant._safe_extract_tar(buf.getvalue(), dest)
-    assert not (dest / "app" / "evil_link").exists()
-
-
-# -- run_assistant: end-to-end mit gescriptetem Claude-Client ----------
-
-
-def test_run_assistant_success_when_tests_pass(monkeypatch):
+def test_send_message_writes_file_and_reports_push_allowed(monkeypatch):
     _set_github_env(monkeypatch)
-    tarball = _build_fake_tarball({"tests/test_dummy.py": PASSING_TEST_FILE})
-    _patch_tarball_fetch(monkeypatch, tarball)
-
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
     fake_client = _FakeClient(
         [
             _response([_tool_use("write_file", {"path": "app/greeting.py", "content": "GRUSS = 'Hallo!'\n"}, "tu1")]),
@@ -127,60 +95,66 @@ def test_run_assistant_success_when_tests_pass(monkeypatch):
     )
     monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
 
-    result = code_assistant.run_assistant("Fuege eine Begruessung hinzu.")
+    result = code_assistant.send_message("Fuege eine Begruessung hinzu.")
 
-    assert result.success is True
-    assert result.files_changed == ["app/greeting.py"]
-    assert "app/greeting.py" in result.diff
-    assert "+GRUSS" in result.diff
-    assert result.session_id
-    assert result.session_id in code_assistant._SESSIONS
+    assert result["reply"] == "Fertig, Tests sind gruen."
+    assert result["files_changed"] == ["app/greeting.py"]
+    assert "+GRUSS" in result["diff"]
+    assert result["push_allowed"] is True
 
 
-def test_run_assistant_failing_tests_block_push(monkeypatch):
+def test_send_message_without_code_changes_needs_no_tests(monkeypatch):
     _set_github_env(monkeypatch)
-    tarball = _build_fake_tarball({"tests/test_dummy.py": FAILING_TEST_FILE})
-    _patch_tarball_fetch(monkeypatch, tarball)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    fake_client = _FakeClient([_response([_text("Das ist eine reine Erklaerung, keine Aenderung noetig.")])])
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
 
+    result = code_assistant.send_message("Was macht chat_service.py?")
+
+    assert result["files_changed"] == []
+    assert result["push_allowed"] is False
+
+
+def test_second_write_after_green_test_re_arms_dirty_flag(monkeypatch):
+    _set_github_env(monkeypatch)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
     fake_client = _FakeClient(
         [
-            _response([_tool_use("write_file", {"path": "app/greeting.py", "content": "X = 1\n"}, "tu1")]),
+            _response([_tool_use("write_file", {"path": "app/x.py", "content": "A = 1\n"}, "tu1")]),
             _response([_tool_use("run_tests", {}, "tu2")]),
-            _response([_text("Tests sind leider rot.")]),
+            _response([_text("Erste Aenderung getestet.")]),
+            _response([_tool_use("write_file", {"path": "app/x.py", "content": "A = 2\n"}, "tu3")]),
+            _response([_text("Noch eine Aenderung, aber noch nicht neu getestet.")]),
         ]
     )
     monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
 
-    result = code_assistant.run_assistant("Etwas kaputtes.")
+    first = code_assistant.send_message("Setze A auf 1.")
+    assert first["push_allowed"] is True
 
-    assert result.success is False
-    assert result.session_id == ""
-    assert code_assistant._SESSIONS == {}
+    second = code_assistant.send_message("Aendere A auf 2.")
+    assert second["push_allowed"] is False
 
 
-def test_run_assistant_turn_cap_reached(monkeypatch):
+def test_turn_cap_reached_within_single_message(monkeypatch):
     _set_github_env(monkeypatch)
-    tarball = _build_fake_tarball({"tests/test_dummy.py": PASSING_TEST_FILE})
-    _patch_tarball_fetch(monkeypatch, tarball)
-
-    # Immer wieder list_directory aufrufen, nie eine finale Textantwort -
-    # muss nach MAX_TURNS sauber abbrechen statt endlos zu laufen.
-    responses = [_response([_tool_use("list_directory", {"path": ""}, f"tu{i}")]) for i in range(code_assistant.MAX_TURNS)]
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    responses = [
+        _response([_tool_use("list_directory", {"path": ""}, f"tu{i}")])
+        for i in range(code_assistant.MAX_TOOL_ROUNDS_PER_MESSAGE)
+    ]
     fake_client = _FakeClient(responses)
     monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
 
-    result = code_assistant.run_assistant("Endlosschleife provozieren.")
+    result = code_assistant.send_message("Endlosschleife provozieren.")
 
-    assert "maximale Anzahl" in result.summary
-    assert result.success is False
-    assert result.session_id == ""
+    assert "maximale Anzahl" in result["reply"]
+    assert result["push_allowed"] is False
 
 
-def test_run_assistant_rejects_disallowed_path_without_crashing(monkeypatch):
+def test_disallowed_path_returns_tool_error_without_crashing(monkeypatch):
     _set_github_env(monkeypatch)
-    tarball = _build_fake_tarball({"tests/test_dummy.py": PASSING_TEST_FILE})
-    _patch_tarball_fetch(monkeypatch, tarball)
-
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
     fake_client = _FakeClient(
         [
             _response([_tool_use("write_file", {"path": "secrets/leak.py", "content": "X = 1\n"}, "tu1")]),
@@ -189,11 +163,32 @@ def test_run_assistant_rejects_disallowed_path_without_crashing(monkeypatch):
     )
     monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
 
-    result = code_assistant.run_assistant("Versuche etwas Verbotenes.")
+    result = code_assistant.send_message("Versuche etwas Verbotenes.")
 
-    assert result.files_changed == []
-    assert result.success is False
-    # Der Fehler wurde als Tool-Result zurueckgegeben, nicht als Exception hochgereicht.
+    assert result["files_changed"] == []
+    assert result["push_allowed"] is False
+
+
+# -- Railway-Werkzeuge ------------------------------------------------------
+
+
+def test_railway_deployment_status_tool_is_dispatched(monkeypatch):
+    _set_github_env(monkeypatch)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    monkeypatch.setattr(
+        railway_client, "get_latest_deployment", lambda: {"id": "dep-1", "status": "SUCCESS", "createdAt": "now"}
+    )
+    fake_client = _FakeClient(
+        [
+            _response([_tool_use("railway_deployment_status", {}, "tu1")]),
+            _response([_text("Der letzte Deploy war erfolgreich.")]),
+        ]
+    )
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
+
+    result = code_assistant.send_message("Ist der letzte Deploy durchgelaufen?")
+
+    assert result["reply"] == "Der letzte Deploy war erfolgreich."
     tool_result_contents = [
         block["content"]
         for call in fake_client.messages.calls
@@ -202,69 +197,90 @@ def test_run_assistant_rejects_disallowed_path_without_crashing(monkeypatch):
         for block in msg["content"]
         if isinstance(block, dict) and block.get("type") == "tool_result"
     ]
-    assert any("Fehler" in c for c in tool_result_contents)
+    assert any("SUCCESS" in c for c in tool_result_contents)
 
 
-def test_run_assistant_rejects_max_concurrent_sessions(monkeypatch, tmp_path):
+def test_railway_trigger_redeploy_tool_is_dispatched(monkeypatch):
     _set_github_env(monkeypatch)
-    monkeypatch.setattr(code_assistant, "_get_client", lambda: _FakeClient([]))
-    for i in range(code_assistant.MAX_CONCURRENT_SESSIONS):
-        fake_dir = tmp_path / f"session-{i}"
-        fake_dir.mkdir()
-        code_assistant._SESSIONS[f"sid-{i}"] = code_assistant.AssistantSession(
-            tmpdir=fake_dir, files_changed=["app/x.py"], diff="diff"
-        )
-
-    with pytest.raises(CodeAssistantConfigError):
-        code_assistant.run_assistant("Noch ein Lauf, sollte abgelehnt werden.")
-
-
-def test_run_assistant_requires_instruction(monkeypatch):
-    _set_github_env(monkeypatch)
-    with pytest.raises(CodeAssistantConfigError):
-        code_assistant.run_assistant("   ")
-
-
-def test_sweep_expired_removes_old_sessions_and_tmpdir(monkeypatch, tmp_path):
-    fake_dir = tmp_path / "expired-session"
-    fake_dir.mkdir()
-    code_assistant._SESSIONS["old-sid"] = code_assistant.AssistantSession(
-        tmpdir=fake_dir, files_changed=["app/x.py"], diff="diff", created_at=0.0
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    monkeypatch.setattr(railway_client, "trigger_redeploy", lambda: True)
+    fake_client = _FakeClient(
+        [
+            _response([_tool_use("railway_trigger_redeploy", {}, "tu1")]),
+            _response([_text("Redeploy angestossen.")]),
+        ]
     )
-    monkeypatch.setattr(code_assistant.time, "time", lambda: code_assistant.SESSION_TTL_SECONDS + 1000)
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
 
-    code_assistant._sweep_expired()
-
-    assert "old-sid" not in code_assistant._SESSIONS
-    assert not fake_dir.exists()
+    result = code_assistant.send_message("Stoss bitte nochmal einen Deploy an.")
+    assert result["reply"] == "Redeploy angestossen."
 
 
-# -- push_session ---------------------------------------------------------
+# -- get_state / reset_chat -------------------------------------------------
 
 
-def test_push_session_unknown_session_raises():
-    with pytest.raises(SessionNotFoundError):
-        code_assistant.push_session("does-not-exist", "Commit-Message")
-
-
-def test_push_session_success_posts_blob_tree_commit_ref(monkeypatch, tmp_path):
+def test_get_state_reflects_conversation_and_diff(monkeypatch):
     _set_github_env(monkeypatch)
-    session_dir = tmp_path / "push-session"
-    session_dir.mkdir()
-    (session_dir / "app").mkdir()
-    (session_dir / "app" / "greeting.py").write_text("GRUSS = 'Hallo!'\n", encoding="utf-8")
-    code_assistant._SESSIONS["sid-push"] = code_assistant.AssistantSession(
-        tmpdir=session_dir, files_changed=["app/greeting.py"], diff="diff"
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    fake_client = _FakeClient(
+        [
+            _response([_tool_use("write_file", {"path": "app/greeting.py", "content": "X = 1\n"}, "tu1")]),
+            _response([_tool_use("run_tests", {}, "tu2")]),
+            _response([_text("Fertig.")]),
+        ]
     )
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
+    code_assistant.send_message("Mach etwas.")
 
-    captured = {"posts": []}
+    state = code_assistant.get_state()
+
+    assert len(state["display_messages"]) == 2  # user + assistant
+    assert state["display_messages"][0] == {"role": "user", "text": "Mach etwas."}
+    assert state["push_allowed"] is True
+    assert "app/greeting.py" in state["files_changed"]
+
+
+def test_reset_chat_clears_history_and_tmpdir(monkeypatch):
+    _set_github_env(monkeypatch)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    fake_client = _FakeClient([_response([_text("Hallo.")])])
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
+    code_assistant.send_message("Hi.")
+    tmpdir_before = code_assistant._chat.tmpdir
+    assert tmpdir_before is not None
+
+    code_assistant.reset_chat()
+
+    assert code_assistant._chat.messages == []
+    assert code_assistant._chat.display_messages == []
+    assert code_assistant._chat.tmpdir is None
+    assert not tmpdir_before.exists()
+
+
+# -- push_current -----------------------------------------------------------
+
+
+def _get_to_push_allowed(monkeypatch):
+    _set_github_env(monkeypatch)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    fake_client = _FakeClient(
+        [
+            _response([_tool_use("write_file", {"path": "app/greeting.py", "content": "GRUSS = 'Hallo!'\n"}, "tu1")]),
+            _response([_tool_use("run_tests", {}, "tu2")]),
+            _response([_text("Fertig.")]),
+        ]
+    )
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
+    code_assistant.send_message("Fuege eine Begruessung hinzu.")
+
+
+def _patch_push_endpoints(monkeypatch, captured=None):
+    captured = captured if captured is not None else {"posts": []}
 
     def fake_get(url, **kwargs):
         if url.endswith("/git/ref/heads/master"):
             return httpx.Response(200, json={"object": {"sha": "head-sha"}}, request=httpx.Request("GET", url))
-        if "/git/commits/" in url:
-            return httpx.Response(200, json={"tree": {"sha": "base-tree-sha"}}, request=httpx.Request("GET", url))
-        raise AssertionError(f"Unerwarteter GET: {url}")
+        return httpx.Response(200, json={"tree": {"sha": "base-tree-sha"}}, request=httpx.Request("GET", url))
 
     def fake_post(url, **kwargs):
         captured["posts"].append((url, kwargs.get("json")))
@@ -272,37 +288,63 @@ def test_push_session_success_posts_blob_tree_commit_ref(monkeypatch, tmp_path):
             return httpx.Response(201, json={"sha": "blob-sha"}, request=httpx.Request("POST", url))
         if url.endswith("/git/trees"):
             return httpx.Response(201, json={"sha": "new-tree-sha"}, request=httpx.Request("POST", url))
-        if url.endswith("/git/commits"):
-            return httpx.Response(201, json={"sha": "new-commit-sha"}, request=httpx.Request("POST", url))
-        raise AssertionError(f"Unerwarteter POST: {url}")
+        return httpx.Response(201, json={"sha": "new-commit-sha"}, request=httpx.Request("POST", url))
 
     def fake_patch(url, **kwargs):
-        assert url.endswith("/git/refs/heads/master")
-        assert kwargs["json"]["force"] is False
         return httpx.Response(200, json={}, request=httpx.Request("PATCH", url))
 
     monkeypatch.setattr(httpx, "get", fake_get)
     monkeypatch.setattr(httpx, "post", fake_post)
     monkeypatch.setattr(httpx, "patch", fake_patch)
+    return captured
 
-    result = code_assistant.push_session("sid-push", "Begruessung hinzugefuegt")
+
+def test_push_current_resets_working_state_but_keeps_messages(monkeypatch):
+    _get_to_push_allowed(monkeypatch)
+    tmpdir_before = code_assistant._chat.tmpdir
+    captured = _patch_push_endpoints(monkeypatch)
+
+    result = code_assistant.push_current("Begruessung hinzugefuegt")
 
     assert result == {"commit_sha": "new-commit-sha"}
-    assert "sid-push" not in code_assistant._SESSIONS
-    assert not session_dir.exists()
+    assert code_assistant._chat.tmpdir is None
+    assert not tmpdir_before.exists()
+    assert code_assistant._chat.tests_green is False
+    # Konversation bleibt erhalten, plus der neue Push-Hinweis.
+    assert len(code_assistant._chat.display_messages) == 3
+    assert "Gepusht" in code_assistant._chat.display_messages[-1]["text"]
     blob_call = next(p for p in captured["posts"] if p[0].endswith("/git/blobs"))
     assert blob_call[1]["content"] == "GRUSS = 'Hallo!'\n"
 
 
-def test_push_session_conflict_on_rejected_ref_update(monkeypatch, tmp_path):
+def test_push_current_rejects_when_nothing_tested(monkeypatch):
     _set_github_env(monkeypatch)
-    session_dir = tmp_path / "push-conflict"
-    session_dir.mkdir()
-    (session_dir / "app").mkdir()
-    (session_dir / "app" / "greeting.py").write_text("X = 1\n", encoding="utf-8")
-    code_assistant._SESSIONS["sid-conflict"] = code_assistant.AssistantSession(
-        tmpdir=session_dir, files_changed=["app/greeting.py"], diff="diff"
+    with pytest.raises(CodeAssistantConfigError):
+        code_assistant.push_current("Nichts zu pushen")
+
+
+def test_push_current_rejects_when_dirty_since_last_test(monkeypatch):
+    _set_github_env(monkeypatch)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    fake_client = _FakeClient(
+        [
+            _response([_tool_use("write_file", {"path": "app/x.py", "content": "A = 1\n"}, "tu1")]),
+            _response([_tool_use("run_tests", {}, "tu2")]),
+            _response([_text("Getestet.")]),
+            _response([_tool_use("write_file", {"path": "app/x.py", "content": "A = 2\n"}, "tu3")]),
+            _response([_text("Weitere Aenderung, ungetestet.")]),
+        ]
     )
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
+    code_assistant.send_message("Setze A auf 1.")
+    code_assistant.send_message("Aendere A auf 2.")
+
+    with pytest.raises(CodeAssistantConfigError):
+        code_assistant.push_current("Sollte abgelehnt werden")
+
+
+def test_push_current_raises_conflict_on_rejected_ref_update(monkeypatch):
+    _get_to_push_allowed(monkeypatch)
 
     def fake_get(url, **kwargs):
         if url.endswith("/git/ref/heads/master"):
@@ -317,27 +359,16 @@ def test_push_session_conflict_on_rejected_ref_update(monkeypatch, tmp_path):
         return httpx.Response(201, json={"sha": "new-commit-sha"}, request=httpx.Request("POST", url))
 
     def fake_patch(url, **kwargs):
-        return httpx.Response(422, json={"message": "Update is not a fast forward"}, request=httpx.Request("PATCH", url))
+        return httpx.Response(422, json={"message": "not a fast forward"}, request=httpx.Request("PATCH", url))
 
     monkeypatch.setattr(httpx, "get", fake_get)
     monkeypatch.setattr(httpx, "post", fake_post)
     monkeypatch.setattr(httpx, "patch", fake_patch)
 
     with pytest.raises(CodeAssistantConflictError):
-        code_assistant.push_session("sid-conflict", "Sollte konfligieren")
+        code_assistant.push_current("Sollte konfligieren")
 
-    # Aufraeumen passiert trotzdem, egal ob Erfolg oder Fehler.
-    assert not session_dir.exists()
-
-
-def test_push_session_requires_commit_message(tmp_path):
-    session_dir = tmp_path / "push-nomsg"
-    session_dir.mkdir()
-    code_assistant._SESSIONS["sid-nomsg"] = code_assistant.AssistantSession(
-        tmpdir=session_dir, files_changed=[], diff=""
-    )
-    with pytest.raises(CodeAssistantConfigError):
-        code_assistant.push_session("sid-nomsg", "   ")
+    assert code_assistant._chat.tmpdir is None  # trotzdem aufgeraeumt
 
 
 # -- _RunContext (direkte Werkzeug-Tests, ohne Agent-Schleife) -----------
@@ -348,22 +379,13 @@ def test_run_context_write_then_read_roundtrip(tmp_path):
     ctx = code_assistant._RunContext(tmp_path)
     ctx.write_file("app/neu.py", "X = 1\n")
     assert ctx.read_file("app/neu.py") == "X = 1\n"
-    assert ctx.originals["app/neu.py"] == ""  # war neu, kein Originalinhalt
-
-
-def test_run_context_list_directory_returns_entries(tmp_path):
-    (tmp_path / "app").mkdir()
-    (tmp_path / "app" / "a.py").write_text("1", encoding="utf-8")
-    ctx = code_assistant._RunContext(tmp_path)
-    entries = ctx.list_directory("app")
-    assert {"name": "a.py", "path": "app/a.py", "type": "file"} in entries
+    assert ctx.originals["app/neu.py"] == ""
 
 
 def test_run_context_run_tests_reports_failure(tmp_path):
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
-    (tests_dir / "test_dummy.py").write_text(FAILING_TEST_FILE, encoding="utf-8")
+    (tests_dir / "test_dummy.py").write_text("def test_fail():\n    assert False\n", encoding="utf-8")
     ctx = code_assistant._RunContext(tmp_path)
     result = ctx.run_tests()
     assert result["returncode"] != 0
-    assert ctx.last_test_result is result

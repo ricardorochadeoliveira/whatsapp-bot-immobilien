@@ -29,24 +29,22 @@
   #mfaEnrollDetails img { display: block; margin-top: 8px; width: 180px; height: 180px; }
   .mfa-active { color: var(--color-success); font-weight: 600; }
   .topbar { display: flex; justify-content: space-between; align-items: center; }
-  .file-tree { list-style: none; margin: 10px 0 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: var(--radius); }
-  .file-tree li { padding: 6px 10px; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--color-border); }
-  .file-tree li:last-child { border-bottom: none; }
-  .file-tree li:hover { background: var(--color-bg); }
-  .file-tree li.dir::before { content: "📁 "; }
-  .file-tree li.file::before { content: "📄 "; }
-  .editor-grid { display: grid; grid-template-columns: 240px 1fr; gap: var(--space-3); align-items: start; }
-  #editorContent { width: 100%; height: 420px; font-family: 'Courier New', monospace; font-size: 13px; white-space: pre; resize: vertical; }
   .warn-banner { background: #FBF1E6; border: 1px solid var(--color-accent); border-radius: var(--radius); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); font-size: 13px; color: var(--color-text); }
   .quelle-count { display: inline-block; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 999px; padding: 4px 12px; margin: 0 6px 6px 0; font-size: 12px; }
-  @media (max-width: 860px) { .editor-grid { grid-template-columns: 1fr; } }
-  #assistantInstruction { height: 90px; }
-  #assistantResult { display: none; margin-top: var(--space-2); }
-  #assistantSummary { white-space: pre-wrap; }
-  #assistantTestOutput, #assistantDiff { max-height: 320px; overflow: auto; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius); padding: var(--space-2); font-family: 'Courier New', monospace; font-size: 12px; white-space: pre; }
-  #assistantPushRow { display: none; margin-top: var(--space-2); }
   .badge-success { color: var(--color-success); font-weight: 600; }
   .badge-fail { color: var(--color-error); font-weight: 600; }
+
+  /* Entwickler-Chat */
+  .chat-thread { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: var(--space-2); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius); margin-top: 10px; }
+  .chat-thread .bubble { max-width: 84%; white-space: pre-wrap; }
+  .bubble-system { align-self: center; background: transparent; border: 1px dashed var(--color-border); color: var(--color-text-muted); font-size: 12px; max-width: 90%; }
+  .chat-input-row { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+  .chat-input-row textarea { flex: 1; height: 56px; margin-top: 0; }
+  .chat-input-row button { margin-top: 0; white-space: nowrap; }
+  #chatStatus { min-height: 18px; }
+  #chatState { margin-top: var(--space-3); }
+  #chatTestOutput, #chatDiff { max-height: 280px; overflow: auto; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius); padding: var(--space-2); font-family: 'Courier New', monospace; font-size: 12px; white-space: pre; margin-top: 6px; }
+  #chatPushRow { display: none; margin-top: var(--space-2); }
 </style>
 </head>
 <body>
@@ -99,50 +97,36 @@
   </div>
 
   <div class="card">
-    <h2>Code-Editor</h2>
-    <div class="warn-banner">⚠️ Änderungen hier gehen über einen echten Git-Commit direkt live, sobald Railway deployed hat. Kein Diff-Review, keine automatischen Tests.</div>
-    <div class="editor-grid">
-      <div>
-        <label>Ordner <input id="editorPath" value=""></label>
-        <button class="secondary" onclick="loadFileList()">Ordner anzeigen</button>
-        <ul class="file-tree" id="fileTree"></ul>
-      </div>
-      <div>
-        <div id="editorFilePath" class="hint"></div>
-        <textarea id="editorContent" spellcheck="false" disabled placeholder="Datei aus der Liste links öffnen..."></textarea>
-        <label>Commit-Message <input id="editorCommitMessage" placeholder="z.B. Bot-Text angepasst"></label>
-        <button id="editorSaveBtn" onclick="saveFile()" disabled>Speichern</button>
-        <div id="editorError" class="error"></div>
-        <div id="editorInfo" class="info"></div>
-      </div>
+    <div class="topbar">
+      <h2 style="margin:0;">Entwickler-Chat</h2>
+      <button class="secondary" onclick="resetChat()">Neu starten</button>
     </div>
-  </div>
+    <div class="warn-banner">⚠️ Ein laufendes Gespräch mit Claude - Claude liest/schreibt Code selbst. Der Testlauf ist das einzige automatische Sicherheitsnetz. Gemeinsamer Verlauf für alle Superadmins. Nichts geht live, bis du selbst "Committen &amp; Pushen" klickst.</div>
 
-  <div class="card">
-    <h2>KI-Assistent</h2>
-    <div class="warn-banner">⚠️ Diese Aenderungen stammen von einer KI, nicht von dir. Der Testlauf ist das einzige automatische Sicherheitsnetz - prueft den Diff unten trotzdem genau, bevor du pushst.</div>
-    <label>Was soll geaendert werden? <textarea id="assistantInstruction" placeholder="z.B. 'Aendere die Begruessung im Chat freundlicher'"></textarea></label>
-    <button id="assistantRunBtn" onclick="runAssistant()">Ausfuehren</button>
-    <div id="assistantStatus" class="hint"></div>
-    <div id="assistantError" class="error"></div>
-    <div id="assistantResult">
-      <h3>Zusammenfassung</h3>
-      <div id="assistantSummary"></div>
-      <h3>Testergebnis <span id="assistantTestBadge"></span></h3>
-      <div id="assistantTestOutput"></div>
-      <h3>Diff</h3>
-      <div id="assistantDiff"></div>
-      <div id="assistantPushRow">
-        <label>Commit-Message <input id="assistantCommitMessage" placeholder="z.B. Begruessungstext angepasst"></label>
-        <button onclick="pushAssistantSession()">Committen & Pushen</button>
-        <div id="assistantPushInfo" class="info"></div>
+    <div class="chat-thread" id="chatThread"></div>
+    <div class="chat-input-row">
+      <textarea id="chatInput" placeholder="z.B. 'Ändere die Begrüssung im Chat freundlicher' oder 'Ist der letzte Deploy durchgelaufen?'"></textarea>
+      <button id="chatSendBtn" onclick="sendChatMessage()">Senden</button>
+    </div>
+    <div id="chatStatus" class="hint"></div>
+    <div id="chatError" class="error"></div>
+
+    <div id="chatState">
+      <h3>Aktueller Stand <span id="chatTestBadge"></span></h3>
+      <div class="hint" id="chatFilesChanged"></div>
+      <div id="chatTestOutput"></div>
+      <div id="chatDiff"></div>
+      <div id="chatPushRow">
+        <label>Commit-Message <input id="chatCommitMessage" placeholder="z.B. Begrüssungstext angepasst"></label>
+        <button onclick="pushChat()">Committen &amp; Pushen</button>
+        <div id="chatPushInfo" class="info"></div>
       </div>
     </div>
   </div>
 
   <div class="card">
     <h2>Zwei-Faktor-Authentifizierung</h2>
-    <div class="hint">Angesichts der Reichweite des Code-Editors dringend empfohlen.</div>
+    <div class="hint">Angesichts der Reichweite des Entwickler-Chats dringend empfohlen.</div>
     <div id="mfaStatus">Status: <span id="mfaStatusText">im Browser nicht direkt einsehbar - falls schon aktiviert, wird beim nächsten Login der Code abgefragt.</span></div>
     <button id="mfaEnrollBtn" class="secondary" onclick="startMfaEnroll()">Aktivieren</button>
     <div id="mfaEnrollDetails">
@@ -158,7 +142,6 @@
 <script>
 let pendingMfaToken = null;
 let pendingMfaFactorId = null;
-let currentFile = null; // {path, sha}
 
 async function authFetch(url, options) {
   options = options || {};
@@ -213,6 +196,7 @@ async function showDashboard(email) {
   document.getElementById('superadminEmail').textContent = email || '';
   await loadStats();
   await loadFehler();
+  await loadChatState();
 }
 
 function statTile(label, value) {
@@ -268,135 +252,105 @@ async function loadFehler() {
   }
 }
 
-async function loadFileList() {
-  const path = document.getElementById('editorPath').value;
-  const errEl = document.getElementById('editorError');
-  errEl.textContent = '';
-  const res = await authFetch('/api/superadmin/files?path=' + encodeURIComponent(path));
-  const data = await res.json();
-  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Laden.'; return; }
-  const tree = document.getElementById('fileTree');
-  tree.innerHTML = '';
-  if (path) {
-    const up = document.createElement('li');
-    up.className = 'dir';
-    up.textContent = '.. (nach oben)';
-    up.onclick = () => { document.getElementById('editorPath').value = path.split('/').slice(0, -1).join('/'); loadFileList(); };
-    tree.appendChild(up);
+function renderChatThread(displayMessages) {
+  const thread = document.getElementById('chatThread');
+  thread.innerHTML = '';
+  for (const m of displayMessages) {
+    const div = document.createElement('div');
+    div.className = m.role === 'user' ? 'bubble bubble-user' : 'bubble bubble-bot';
+    div.textContent = m.text;
+    thread.appendChild(div);
   }
-  for (const entry of data.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1))) {
-    const li = document.createElement('li');
-    li.className = entry.type === 'dir' ? 'dir' : 'file';
-    li.textContent = entry.name;
-    li.onclick = () => {
-      if (entry.type === 'dir') {
-        document.getElementById('editorPath').value = entry.path;
-        loadFileList();
-      } else {
-        openFile(entry.path);
-      }
-    };
-    tree.appendChild(li);
+  thread.scrollTop = thread.scrollHeight;
+}
+
+function renderChatState(data) {
+  document.getElementById('chatFilesChanged').textContent =
+    data.files_changed.length > 0 ? `${data.files_changed.length} Datei(en) geändert: ${data.files_changed.join(', ')}` : 'Keine offenen Änderungen.';
+  document.getElementById('chatTestOutput').textContent = data.test_output || '(noch keine Tests gelaufen)';
+  document.getElementById('chatDiff').textContent = data.diff || '(kein Diff)';
+  const badge = document.getElementById('chatTestBadge');
+  if (data.files_changed.length === 0) {
+    badge.textContent = '';
+  } else {
+    badge.textContent = data.push_allowed ? '✓ bereit zum Pushen' : '✗ noch nicht bereit';
+    badge.className = data.push_allowed ? 'badge-success' : 'badge-fail';
   }
+  document.getElementById('chatPushRow').style.display = data.push_allowed ? 'block' : 'none';
 }
 
-async function openFile(path) {
-  const errEl = document.getElementById('editorError');
-  const infoEl = document.getElementById('editorInfo');
-  errEl.textContent = ''; infoEl.textContent = '';
-  const res = await authFetch('/api/superadmin/files/content?path=' + encodeURIComponent(path));
+async function loadChatState() {
+  const res = await authFetch('/api/superadmin/chat/state');
+  if (!res.ok) return;
   const data = await res.json();
-  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Laden.'; return; }
-  currentFile = {path: data.path, sha: data.sha};
-  document.getElementById('editorFilePath').textContent = data.path;
-  const textarea = document.getElementById('editorContent');
-  textarea.value = data.content;
-  textarea.disabled = false;
-  document.getElementById('editorSaveBtn').disabled = false;
+  renderChatThread(data.display_messages);
+  renderChatState(data);
 }
 
-async function saveFile() {
-  const errEl = document.getElementById('editorError');
-  const infoEl = document.getElementById('editorInfo');
-  errEl.textContent = ''; infoEl.textContent = '';
-  if (!currentFile) return;
-  const commitMessage = document.getElementById('editorCommitMessage').value.trim();
-  if (!commitMessage) { errEl.textContent = 'Commit-Message ist Pflicht.'; return; }
-  if (!confirm('Das geht sofort live, sobald Railway deployed hat. Fortfahren?')) return;
-
-  const res = await authFetch('/api/superadmin/files/content', {
-    method: 'PUT', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      path: currentFile.path,
-      content: document.getElementById('editorContent').value,
-      sha: currentFile.sha,
-      commit_message: commitMessage
-    })
-  });
-  const data = await res.json();
-  if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Speichern.'; return; }
-  currentFile.sha = data.sha;
-  infoEl.textContent = 'Gespeichert und committet. Railway deployt jetzt automatisch.';
-}
-
-let assistantSessionId = null;
-
-async function runAssistant() {
-  const instruction = document.getElementById('assistantInstruction').value.trim();
-  const errEl = document.getElementById('assistantError');
-  const statusEl = document.getElementById('assistantStatus');
-  const runBtn = document.getElementById('assistantRunBtn');
+async function sendChatMessage() {
+  const input = document.getElementById('chatInput');
+  const message = input.value.trim();
+  const errEl = document.getElementById('chatError');
+  const statusEl = document.getElementById('chatStatus');
+  const sendBtn = document.getElementById('chatSendBtn');
   errEl.textContent = '';
-  document.getElementById('assistantResult').style.display = 'none';
-  document.getElementById('assistantPushRow').style.display = 'none';
-  if (!instruction) { errEl.textContent = 'Bitte beschreiben, was geaendert werden soll.'; return; }
+  if (!message) { errEl.textContent = 'Bitte eine Nachricht eingeben.'; return; }
 
-  runBtn.disabled = true;
-  statusEl.textContent = 'Läuft... das kann 30-90 Sekunden dauern (Claude liest Code, schreibt Änderungen, führt Tests aus).';
+  input.value = '';
+  sendBtn.disabled = true;
+  input.disabled = true;
+  statusEl.textContent = 'Claude arbeitet... das kann 30-90 Sekunden dauern.';
   try {
-    const res = await authFetch('/api/superadmin/assistant/run', {
+    const res = await authFetch('/api/superadmin/chat/send', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({instruction})
+      body: JSON.stringify({message})
     });
     const data = await res.json();
-    if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Ausführen.'; return; }
-
-    assistantSessionId = data.session_id || null;
-    document.getElementById('assistantSummary').textContent = data.summary;
-    document.getElementById('assistantTestOutput').textContent = data.test_output || '(keine Ausgabe)';
-    document.getElementById('assistantDiff').textContent = data.diff || '(keine Änderungen)';
-    const badge = document.getElementById('assistantTestBadge');
-    badge.textContent = data.success ? '✓ erfolgreich' : '✗ nicht bereit zum Committen';
-    badge.className = data.success ? 'badge-success' : 'badge-fail';
-    document.getElementById('assistantResult').style.display = 'block';
-    document.getElementById('assistantPushRow').style.display = data.success ? 'block' : 'none';
+    if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Senden.'; input.value = message; return; }
+    renderChatThread(data.display_messages);
+    renderChatState(data);
   } finally {
-    runBtn.disabled = false;
+    sendBtn.disabled = false;
+    input.disabled = false;
     statusEl.textContent = '';
   }
 }
 
-async function pushAssistantSession() {
-  const errEl = document.getElementById('assistantError');
-  const infoEl = document.getElementById('assistantPushInfo');
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('chatInput');
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+    });
+  }
+});
+
+async function pushChat() {
+  const errEl = document.getElementById('chatError');
+  const infoEl = document.getElementById('chatPushInfo');
   errEl.textContent = ''; infoEl.textContent = '';
-  if (!assistantSessionId) { errEl.textContent = 'Keine gültige Session - bitte erneut ausführen.'; return; }
-  const commitMessage = document.getElementById('assistantCommitMessage').value.trim();
+  const commitMessage = document.getElementById('chatCommitMessage').value.trim();
   if (!commitMessage) { errEl.textContent = 'Commit-Message ist Pflicht.'; return; }
 
-  const filesChanged = document.getElementById('assistantDiff').textContent;
-  const fileCount = (filesChanged.match(/^--- a\//gm) || []).length;
-  if (!confirm(`Das ändert ${fileCount} Datei(en) direkt live, sobald Railway deployed hat. Diff oben genau geprüft? Fortfahren?`)) return;
+  const fileCountText = document.getElementById('chatFilesChanged').textContent;
+  if (!confirm(`${fileCountText} Das geht sofort live, sobald Railway deployed hat. Diff oben genau geprüft? Fortfahren?`)) return;
 
-  const res = await authFetch('/api/superadmin/assistant/push', {
+  const res = await authFetch('/api/superadmin/chat/push', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: assistantSessionId, commit_message: commitMessage})
+    body: JSON.stringify({commit_message: commitMessage})
   });
   const data = await res.json();
   if (!res.ok) { errEl.textContent = data.detail || 'Fehler beim Pushen.'; return; }
   infoEl.textContent = 'Gepusht (Commit ' + data.commit_sha.slice(0, 7) + '). Railway deployt jetzt automatisch.';
-  document.getElementById('assistantPushRow').style.display = 'none';
-  assistantSessionId = null;
+  document.getElementById('chatCommitMessage').value = '';
+  await loadChatState();
+}
+
+async function resetChat() {
+  if (!confirm('Verlauf und ungespeicherte Änderungen wirklich verwerfen und neu starten?')) return;
+  await authFetch('/api/superadmin/chat/reset', {method: 'POST'});
+  document.getElementById('chatPushInfo').textContent = '';
+  await loadChatState();
 }
 
 async function loadMfaStatus() {

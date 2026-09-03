@@ -20,15 +20,9 @@ load_dotenv()
 
 from app.bootstrap import context  # noqa: E402  (nach load_dotenv)
 from app import code_assistant  # noqa: E402
-from app import github_editor  # noqa: E402
 from app import superadmin_auth  # noqa: E402
-from app.code_assistant import (  # noqa: E402
-    CodeAssistantConfigError,
-    CodeAssistantConflictError,
-    SessionNotFoundError,
-)
+from app.code_assistant import CodeAssistantConfigError, CodeAssistantConflictError  # noqa: E402
 from app.firma_service import FirmaAuthError  # noqa: E402
-from app.github_editor import GithubEditorConflictError, GithubEditorError  # noqa: E402
 from app.image_storage import ImageUploadError, upload_image  # noqa: E402
 from app.meta_whatsapp import (  # noqa: E402
     parse_incoming_messages,
@@ -663,8 +657,8 @@ def firma_list_leads(firma: Firma = Depends(get_current_firma)):
 
 # ---------------------------------------------------------------------------
 # Superadmin-Bereich: eigener Login (Supabase Auth + E-Mail-Allowlist, siehe
-# app/superadmin_auth.py), Bot-Statistiken, Fehler-Protokoll, Code-Editor
-# (GitHub Contents API, siehe app/github_editor.py).
+# app/superadmin_auth.py), Bot-Statistiken, Fehler-Protokoll, Entwickler-Chat
+# (siehe app/code_assistant.py).
 # ---------------------------------------------------------------------------
 
 SUPERADMIN_COOKIE_NAME = "superadmin_session"
@@ -818,84 +812,66 @@ def superadmin_fehler(limit: int = 200) -> list[dict]:
     ]
 
 
-@app.get("/api/superadmin/files", dependencies=SUPERADMIN_PROTECTED)
-def superadmin_list_files(path: str = "") -> list[dict]:
-    try:
-        return github_editor.list_directory(path)
-    except GithubEditorError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/superadmin/files/content", dependencies=SUPERADMIN_PROTECTED)
-def superadmin_get_file(path: str) -> dict:
-    try:
-        return github_editor.get_file(path)
-    except GithubEditorError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-class SuperadminFileWriteRequest(BaseModel):
-    path: str
-    content: str
-    sha: str
-    commit_message: str
-
-
-@app.put("/api/superadmin/files/content", dependencies=SUPERADMIN_PROTECTED)
-def superadmin_write_file(req: SuperadminFileWriteRequest) -> dict:
-    try:
-        return github_editor.update_file(req.path, req.content, req.sha, req.commit_message)
-    except GithubEditorConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except GithubEditorError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 # ---------------------------------------------------------------------------
-# KI-Code-Assistent (siehe app/code_assistant.py) - Claude schreibt Code
-# selbst, Tests entscheiden ueber "commit-ready", Push bleibt ein eigener,
-# expliziter Schritt.
+# Entwickler-Chat (siehe app/code_assistant.py) - EIN gemeinsamer, laufender
+# Chat fuer alle Superadmins. Claude liest/schreibt Code selbst, Tests
+# entscheiden ueber "push-bereit", Push bleibt ein eigener, expliziter Schritt.
 # ---------------------------------------------------------------------------
 
 
-class SuperadminAssistantRunRequest(BaseModel):
-    instruction: str
+class SuperadminChatSendRequest(BaseModel):
+    message: str
 
 
-class SuperadminAssistantRunResponse(BaseModel):
-    session_id: str
-    success: bool
-    summary: str
-    test_output: str
+class SuperadminChatStateResponse(BaseModel):
+    display_messages: list[dict]
     diff: str
     files_changed: list[str]
+    push_allowed: bool
+    test_output: str
 
 
-class SuperadminAssistantPushRequest(BaseModel):
-    session_id: str
+class SuperadminChatSendResponse(SuperadminChatStateResponse):
+    reply: str
+
+
+class SuperadminChatPushRequest(BaseModel):
     commit_message: str
+
+
+@app.get(
+    "/api/superadmin/chat/state",
+    dependencies=SUPERADMIN_PROTECTED,
+    response_model=SuperadminChatStateResponse,
+)
+def superadmin_chat_state() -> SuperadminChatStateResponse:
+    return SuperadminChatStateResponse(**code_assistant.get_state())
 
 
 @app.post(
-    "/api/superadmin/assistant/run",
+    "/api/superadmin/chat/send",
     dependencies=SUPERADMIN_PROTECTED,
-    response_model=SuperadminAssistantRunResponse,
+    response_model=SuperadminChatSendResponse,
 )
-def superadmin_assistant_run(req: SuperadminAssistantRunRequest) -> SuperadminAssistantRunResponse:
+def superadmin_chat_send(req: SuperadminChatSendRequest) -> SuperadminChatSendResponse:
     try:
-        result = code_assistant.run_assistant(req.instruction)
+        result = code_assistant.send_message(req.message)
     except CodeAssistantConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return SuperadminAssistantRunResponse(**result.__dict__)
+    return SuperadminChatSendResponse(**result)
 
 
-@app.post("/api/superadmin/assistant/push", dependencies=SUPERADMIN_PROTECTED)
-def superadmin_assistant_push(req: SuperadminAssistantPushRequest) -> dict:
+@app.post("/api/superadmin/chat/push", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_chat_push(req: SuperadminChatPushRequest) -> dict:
     try:
-        return code_assistant.push_session(req.session_id, req.commit_message)
-    except SessionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return code_assistant.push_current(req.commit_message)
     except CodeAssistantConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CodeAssistantConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/superadmin/chat/reset", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_chat_reset() -> dict:
+    code_assistant.reset_chat()
+    return {"ok": True}
