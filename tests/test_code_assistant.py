@@ -97,10 +97,26 @@ def test_send_message_writes_file_and_reports_push_allowed(monkeypatch):
 
     result = code_assistant.send_message("Fuege eine Begruessung hinzu.")
 
-    assert result["reply"] == "Fertig, Tests sind gruen."
+    assert result["reply"].startswith("Fertig, Tests sind gruen.")
+    assert "Noch NICHT live" in result["reply"]
     assert result["files_changed"] == ["app/greeting.py"]
     assert "+GRUSS" in result["diff"]
     assert result["push_allowed"] is True
+
+
+def test_send_message_without_write_file_has_no_not_live_warning(monkeypatch):
+    # Der "Noch NICHT live"-Hinweis (siehe test oben) darf eine reine
+    # Erklaerung ohne Codeaenderung nicht verunstalten - sonst wirkt jede
+    # Antwort so, als waere staendig etwas Ungepushtes offen.
+    _set_github_env(monkeypatch)
+    _patch_tarball_fetch(monkeypatch, _default_tarball())
+    fake_client = _FakeClient([_response([_text("Das macht chat_service.py.")])])
+    monkeypatch.setattr(code_assistant, "_get_client", lambda: fake_client)
+
+    result = code_assistant.send_message("Was macht chat_service.py?")
+
+    assert result["reply"] == "Das macht chat_service.py."
+    assert "Noch NICHT live" not in result["reply"]
 
 
 def test_send_message_result_has_all_keys_the_api_response_model_requires(monkeypatch):

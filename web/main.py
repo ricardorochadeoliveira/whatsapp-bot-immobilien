@@ -857,6 +857,12 @@ def superadmin_chat_send(req: SuperadminChatSendRequest) -> SuperadminChatSendRe
     try:
         result = code_assistant.send_message(req.message)
     except CodeAssistantConfigError as exc:
+        # Landet im Fehlerprotokoll (siehe /api/superadmin/errors) - sonst
+        # verschwindet ein fehlgeschlagener Chat-Turn spurlos, sobald der
+        # Browser-Tab geschlossen wird, und laesst sich im Nachhinein nicht
+        # mehr nachvollziehen (anders als bei einem echten Push-Konflikt,
+        # der wenigstens im Chat-Verlauf sichtbar bleibt).
+        context.fehlerlog_repo.add("code_assistant_send", str(exc))
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return SuperadminChatSendResponse(**result)
 
@@ -866,8 +872,10 @@ def superadmin_chat_push(req: SuperadminChatPushRequest) -> dict:
     try:
         return code_assistant.push_current(req.commit_message)
     except CodeAssistantConflictError as exc:
+        context.fehlerlog_repo.add("code_assistant_push_conflict", str(exc))
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except CodeAssistantConfigError as exc:
+        context.fehlerlog_repo.add("code_assistant_push", str(exc))
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
