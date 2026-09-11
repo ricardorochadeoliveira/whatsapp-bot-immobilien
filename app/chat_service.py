@@ -612,9 +612,19 @@ class ChatService:
             return self._handle_pending_search_slot(session, text)
 
         if session.pending_criteria is not None:
-            antwort = self._handle_pending_confirmation(session, text)
-            session.add_display("bot", antwort)
-            return [antwort]
+            antwort_lower = text.strip().lower()
+            if antwort_lower in JA_WOERTER or antwort_lower in NEIN_WOERTER:
+                antwort = self._handle_pending_confirmation(session, text)
+                session.add_display("bot", antwort)
+                return [antwort]
+            # Keine ja/nein-Antwort: der Kunde beschreibt vermutlich schon
+            # die naechste Suche (z.B. eine weitere Wohnung/anderer Kanton),
+            # statt auf die Suchabo-Frage einzugehen. Ohne dieses Loslassen
+            # wuerde jede neue Suchanfrage hier einfach mit "bitte ja oder
+            # nein" beantwortet und nie ausgefuehrt - genau der gemeldete
+            # Bug, dass passende Inserate im Chat nicht auftauchen.
+            session.pending_criteria = None
+            session.pending_interactive = None
 
         session.claude_messages.append({"role": "user", "content": text})
         if len(session.claude_messages) > MAX_CONVERSATION_MESSAGES:
@@ -723,9 +733,13 @@ class ChatService:
             "Dann melde ich mich automatisch, sobald ein neues passendes Inserat "
             "reinkommt - egal von welchem Anbieter. (ja/nein)"
         )
-        session.claude_messages.append(
-            {"role": "assistant", "content": f"{treffer_text}\n{rueckfrage}"}
-        )
+        # Suche ist abgeschlossen - Rohverlauf leeren, damit eine weitere
+        # Suche im selben Chat (andere Wohnung/anderer Kanton) nicht durch
+        # die bereits beantworteten alten Kriterien verfaelscht wird (Claude
+        # sieht sonst weiterhin z.B. den alten Kanton in der Historie und
+        # vermischt ihn mit der neuen Anfrage). Analog zu
+        # session.listing_messages nach einem eingereichten Inserat.
+        session.claude_messages = []
         session.pending_criteria = criteria
         session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
 

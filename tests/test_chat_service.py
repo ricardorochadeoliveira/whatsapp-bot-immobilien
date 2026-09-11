@@ -500,6 +500,52 @@ def test_gefuehrte_suche_unbekannte_antwort_fragt_erneut():
     assert service.get_session(phone).pending_search_slot == "rooms"
 
 
+def test_neue_suche_statt_ja_nein_wird_nicht_blockiert():
+    """Bug: nach einer abgeschlossenen Suche wartet der Bot auf ja/nein zum
+    Suchabo. Beschreibt der Kunde stattdessen direkt die naechste Wohnung
+    (z.B. anderer Kanton), darf das nicht einfach mit "bitte ja oder nein"
+    beantwortet werden - sonst wird die neue Suche nie ausgefuehrt, obwohl
+    passende Inserate existieren."""
+    service, *_ = make_service()
+    phone = "+41790000036"
+    _als_mieter(service, phone)
+    erste_kriterien = SearchCriteria(rooms=2.5, canton="Zug", max_price=2200, property_type="Wohnung")
+    zweite_kriterien = SearchCriteria(rooms=3.5, canton="Bern", max_price=2000, property_type="Haus")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=erste_kriterien)
+    ):
+        service.handle_message(phone, "2.5-Zimmer-Wohnung in Zug, max 2200.-")
+
+    assert service.get_session(phone).pending_criteria is not None
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=zweite_kriterien)
+    ) as mock_extract:
+        antworten = service.handle_message(phone, "Ich suche ausserdem ein 3.5-Zimmer-Haus in Bern, max 2000.-")
+
+    mock_extract.assert_called_once()
+    assert any("Suchabo anlegen" in a for a in antworten)
+    assert service.get_session(phone).pending_criteria.canton == "Bern"
+
+
+def test_claude_messages_werden_nach_abgeschlossener_suche_geleert():
+    """Ohne Reset wuerde die naechste Suche im selben Chat den kompletten
+    alten Verlauf (inkl. bereits beantworteter Kriterien) an Claude
+    mitschicken und dadurch verfaelscht werden."""
+    service, *_ = make_service()
+    phone = "+41790000037"
+    _als_mieter(service, phone)
+    criteria = SearchCriteria(rooms=2.5, canton="Zug", max_price=2200, property_type="Wohnung")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        service.handle_message(phone, "2.5-Zimmer-Wohnung in Zug, max 2200.-")
+
+    assert service.get_session(phone).claude_messages == []
+
+
 def test_rate_limit_blocks_further_claude_calls():
     # Beide Nachrichten muessen extract_intent erreichen (keine pending_criteria
     # dazwischen) - dafuer bleibt die Extraktion beide Male unvollstaendig.
