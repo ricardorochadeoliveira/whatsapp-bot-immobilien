@@ -12,7 +12,7 @@ from app.chat_service import ChatService
 from app.firma_service import FirmaService
 from app.intent_extraction import IntentExtractionResult, ListingExtractionResult
 from app.matching import MatchingEngine
-from app.models import ListingSubmission, SearchCriteria
+from app.models import Firma, Immobilie, ListingSubmission, SearchCriteria
 from app.notifications import NotificationDispatcher
 from app.rate_limiter import RateLimiter
 from app.repository import (
@@ -27,13 +27,22 @@ from app.repository import (
 from app.seed_data import build_seed_immobilien
 
 
+def _run_immediately(delay_seconds, callback):
+    """Test-Ersatz fuer ChatService._default_schedule_delay - fuehrt sofort
+    synchron aus, statt wirklich zu warten (siehe SUCHABO_FRAGE_DELAY_SECONDS
+    in app/chat_service.py)."""
+    callback()
+
+
 def make_service(
     rate_limiter=None,
     image_sender=None,
+    button_sender=None,
     firma_service=None,
     firma_repo=None,
     chatkontakt_repo=None,
     fehlerlog_repo=None,
+    schedule_delay=_run_immediately,
 ):
     immobilien_repo = InMemoryImmobilienRepository(seed=build_seed_immobilien())
     firma_repo = firma_repo if firma_repo is not None else InMemoryFirmaRepository()
@@ -51,9 +60,11 @@ def make_service(
         dispatcher=dispatcher,
         lead_repo=lead_repo,
         image_sender=image_sender,
+        button_sender=button_sender,
         firma_service=firma_service,
         chatkontakt_repo=chatkontakt_repo,
         fehlerlog_repo=fehlerlog_repo,
+        schedule_delay=schedule_delay,
     )
     return service, suchprofil_repo, immobilien_repo, firma_repo, lead_repo
 
@@ -544,6 +555,185 @@ def test_claude_messages_werden_nach_abgeschlossener_suche_geleert():
         service.handle_message(phone, "2.5-Zimmer-Wohnung in Zug, max 2200.-")
 
     assert service.get_session(phone).claude_messages == []
+
+
+# -- Kontaktdaten bei Treffern -----------------------------------------------
+
+
+def test_einzelner_treffer_liefert_kontaktdaten_direkt_und_legt_lead_an():
+    service, _, immobilien_repo, firma_repo, lead_repo = make_service()
+    firma_repo.add(Firma(id="f1", name="Muster AG", email="muster@example.com", telefonnummer="+41791112233"))
+    immobilien_repo.add(
+        Immobilie(
+            id="i1",
+            firma_id="f1",
+            titel="Exklusive Attikawohnung",
+            zimmer=4,
+            kanton="Uri",
+            ort="Altdorf",
+            preis=2500,
+            objekttyp="Wohnung",
+            flaeche_m2=100,
+            link="https://example.com/inserate/neu",
+        )
+    )
+    phone = "+41790000040"
+    _als_mieter(service, phone)
+    criteria = SearchCriteria(canton="Uri")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        service.handle_message(phone, "Ich suche etwas in Uri, egal was")
+    for antwort in ("egal", "egal", "egal"):
+        antworten = service.handle_message(phone, antwort)
+
+    kombiniert = "\n".join(antworten)
+    assert "Exklusive Attikawohnung" in kombiniert
+    assert "Muster AG" in kombiniert
+    assert "+41791112233" in kombiniert
+    assert "muster@example.com" in kombiniert
+    # Platzhalter-Link wird Kunden nicht mehr angezeigt.
+    assert "example.com/inserate/neu" not in kombiniert
+    assert len(lead_repo.get_by_firma("f1")) == 1
+
+
+def test_kontakt_faellt_auf_firma_zurueck_wenn_inserat_keine_eigene_hat():
+    service, _, immobilien_repo, firma_repo, _ = make_service()
+    firma_repo.add(Firma(id="f2", name="Alte Verwaltung AG", email="alt@example.com", telefonnummer=None))
+    immobilien_repo.add(
+        Immobilie(
+            id="i2",
+            firma_id="f2",
+            titel="Aelteres Inserat ohne eigene Kontaktperson",
+            zimmer=3,
+            kanton="Schwyz",
+            ort="Schwyz",
+            preis=1900,
+            objekttyp="Wohnung",
+            flaeche_m2=80,
+            link="https://example.com/inserate/neu",
+        )
+    )
+    phone = "+41790000041"
+    _als_mieter(service, phone)
+    criteria = SearchCriteria(canton="Schwyz")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        service.handle_message(phone, "Ich suche etwas in Schwyz, egal was")
+    for antwort in ("egal", "egal", "egal"):
+        antworten = service.handle_message(phone, antwort)
+
+    assert any("Alte Verwaltung AG" in a and "alt@example.com" in a for a in antworten)
+
+
+def test_suchabo_frage_wird_verzoegert_nach_kontaktdaten_verschickt():
+    """Regressionstest fuer den gemeldeten UX-Bug: die Suchabo-Rueckfrage
+    kam teils vor dem Bild/den Kontaktdaten an. Die Frage darf deshalb nicht
+    Teil der sofortigen Antwort sein, sondern erst nach dem geplanten Delay."""
+    captured = {}
+
+    def capturing_schedule(delay_seconds, callback):
+        captured["delay"] = delay_seconds
+        captured["callback"] = callback
+
+    service, *_ = make_service(schedule_delay=capturing_schedule)
+    phone = "+41790000042"
+    _als_mieter(service, phone)
+    criteria = SearchCriteria(rooms=2.5, canton="Zug", max_price=2200, property_type="Wohnung")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        antworten = service.handle_message(phone, "2.5-Zimmer-Wohnung in Zug, max 2200.-")
+
+    assert not any("Suchabo anlegen" in a for a in antworten)
+    assert captured["delay"] == chat_service_module.SUCHABO_FRAGE_DELAY_SECONDS
+    # pending_criteria ist schon gesetzt (ein schneller "ja" darf sofort
+    # funktionieren), aber die Buttons/der Text kommen erst beim Callback.
+    assert service.get_session(phone).pending_criteria is not None
+    assert service.get_session(phone).pending_interactive is None
+
+    captured["callback"]()
+
+    assert any("Suchabo anlegen" in m["text"] for m in service.get_session(phone).display_messages)
+    prompt = service.get_session(phone).pending_interactive
+    assert prompt.kind == "button"
+    assert prompt.options == [("ja", "Ja"), ("nein", "Nein")]
+
+
+def test_mehrere_treffer_lassen_erst_auswaehlen_dann_kontaktdaten():
+    service, *_ = make_service()
+    phone = "+41790000043"
+    _als_mieter(service, phone)
+    criteria = SearchCriteria(canton="Zug")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        service.handle_message(phone, "Ich suche etwas in Zug")
+
+    for antwort in ("egal", "egal", "egal"):
+        letzte = service.handle_message(phone, antwort)
+
+    assert service.get_session(phone).pending_listing_choice is not None
+    anzahl = len(service.get_session(phone).pending_listing_choice)
+    assert anzahl > 1
+    assert any("Welches Inserat interessiert dich" in a for a in letzte)
+
+    gewaehlte_id = service.get_session(phone).pending_listing_choice[0]
+
+    antworten = service.handle_message(phone, "1")
+
+    assert service.get_session(phone).pending_listing_choice is None
+    assert service.get_session(phone).pending_criteria is not None
+    kombiniert = "\n".join(antworten)
+    assert "Kontakt" in kombiniert or "nicht hinterlegt" in kombiniert
+
+
+def test_ungueltige_nummer_bei_mehreren_treffern_fragt_erneut():
+    service, *_ = make_service()
+    phone = "+41790000044"
+    _als_mieter(service, phone)
+    criteria = SearchCriteria(canton="Zug")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        service.handle_message(phone, "Ich suche etwas in Zug")
+    for antwort in ("egal", "egal", "egal"):
+        service.handle_message(phone, antwort)
+
+    antworten = service.handle_message(phone, "99")
+
+    assert "Zahl zwischen 1 und" in antworten[0]
+    assert service.get_session(phone).pending_listing_choice is not None
+
+
+def test_vermieter_inserat_bekommt_eigene_kontaktperson_aus_dem_flow():
+    service, _, immobilien_repo, *_ = make_service()
+    _als_vermieter(service, "+41790000045", typ="privatperson", name="Erika Muster")
+
+    listing = ListingSubmission(
+        title="Gemuetliche Dachwohnung",
+        rooms=2,
+        canton="Uri",
+        city="Altdorf",
+        price=1600,
+        property_type="Wohnung",
+        living_space_m2=55,
+        listing_type="miete",
+    )
+    with patch.object(
+        chat_service_module, "extract_listing", return_value=ListingExtractionResult(listing=listing)
+    ):
+        service.handle_message("+41790000045", "2-Zimmer-Wohnung in Altdorf fuer 1600.-")
+
+    neue = next(i for i in immobilien_repo.get_all() if i.titel == "Gemuetliche Dachwohnung")
+    assert neue.kontakt_name == "Erika Muster"
+    assert neue.kontakt_telefon == "+41790000045"
 
 
 def test_rate_limit_blocks_further_claude_calls():

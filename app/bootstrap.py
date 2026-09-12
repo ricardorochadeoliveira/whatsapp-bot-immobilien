@@ -17,7 +17,7 @@ from app.firma_service import FirmaService
 from app.matching import MatchingEngine
 from app.matching_job import MatchingJob
 from app.meta_whatsapp import is_configured as meta_whatsapp_configured
-from app.meta_whatsapp import send_image_message, send_text_message
+from app.meta_whatsapp import send_button_message, send_image_message, send_text_message
 from app.notifications import NotificationDispatcher
 from app.rate_limiter import RateLimiter
 
@@ -49,6 +49,21 @@ def _build_image_sender(fehlerlog_repo) -> Callable[[str, str, str | None], None
             send_image_message(to, image_url, caption)
         except Exception as exc:
             logger.exception("WhatsApp-Bildversand an %s fehlgeschlagen", to)
+            fehlerlog_repo.add("whatsapp_proactive_send", str(exc), telefonnummer=to)
+
+    return _send
+
+
+def _build_button_sender(fehlerlog_repo) -> Callable[[str, str, list], None]:
+    """Wrapper um send_button_message - gleiches Fehlerverhalten wie
+    _build_outbound_sender. Fuer die verzoegerte Suchabo-Rueckfrage (siehe
+    app/chat_service.py: _schedule_suchabo_frage)."""
+
+    def _send(to: str, text: str, options: list) -> None:
+        try:
+            send_button_message(to, text, options)
+        except Exception as exc:
+            logger.exception("WhatsApp-Buttonversand an %s fehlgeschlagen", to)
             fehlerlog_repo.add("whatsapp_proactive_send", str(exc), telefonnummer=to)
 
     return _send
@@ -218,6 +233,7 @@ class AppContext:
             lead_repo=self.lead_repo,
             outbound_sender=_build_outbound_sender(self.fehlerlog_repo) if meta_whatsapp_configured() else None,
             image_sender=_build_image_sender(self.fehlerlog_repo) if meta_whatsapp_configured() else None,
+            button_sender=_build_button_sender(self.fehlerlog_repo) if meta_whatsapp_configured() else None,
             firma_service=self.firma_service,
             chatkontakt_repo=self.chatkontakt_repo,
             fehlerlog_repo=self.fehlerlog_repo,

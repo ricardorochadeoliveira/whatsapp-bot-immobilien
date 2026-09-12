@@ -32,7 +32,7 @@ from app.intent_extraction import (
     extract_listing,
 )
 from app.matching import MatchingEngine, suchprofil_to_criteria
-from app.models import Immobilie, Kunde, Lead, SearchCriteria, Suchprofil
+from app.models import Firma, Immobilie, Kunde, Lead, SearchCriteria, Suchprofil
 from app.notifications import NotificationDispatcher
 from app.rate_limiter import RateLimiter, build_default_rate_limiter
 from app.repository import (
@@ -135,6 +135,18 @@ RATE_LIMIT_MESSAGE = (
     "du weiterschreibst."
 )
 
+# Wird bei jedem neu erfassten Inserat als Default gesetzt, solange keine
+# echte Detailseite existiert (siehe _handle_listing_extraction/web/main.py) -
+# beim Anzeigen an Mieter bewusst ausgeblendet (siehe _format_treffer), statt
+# ihnen einen kaputten Platzhalter-Link zu zeigen.
+PLACEHOLDER_LINK = "https://example.com/inserate/neu"
+
+# Verzoegerung fuer die Suchabo-Rueckfrage nach einem Treffer: die
+# Kontaktdaten/das Bild werden ueber einen separaten proaktiven WhatsApp-Call
+# verschickt, dessen Zustellreihenfolge sich nicht garantieren laesst - ohne
+# Verzoegerung kam die Rueckfrage teils VOR dem Bild an, was verwirrend wirkt.
+SUCHABO_FRAGE_DELAY_SECONDS = 6
+
 
 @dataclass
 class PendingLead:
@@ -175,6 +187,11 @@ class Session:
     pending_interactive: Optional[InteractivePrompt] = None
     pending_search_slot: Optional[str] = None  # "rooms" | "property_type" | "max_price"
     partial_criteria: Optional[SearchCriteria] = None
+    # Wartet auf eine Nummer-Auswahl unter mehreren Treffern (siehe
+    # _finish_search/_handle_listing_choice) - Liste der Immobilie-IDs in
+    # der Reihenfolge, wie sie dem Kunden angezeigt wurden.
+    pending_listing_choice: Optional[list[str]] = None
+    pending_listing_criteria: Optional[SearchCriteria] = None
     # Felder, die bereits gefragt UND beantwortet wurden - auch wenn die
     # Antwort "Egal" war (dann bleibt das Feld auf SearchCriteria weiterhin
     # None). Ohne diese Liste liesse sich "noch nicht gefragt" nicht von
@@ -195,13 +212,38 @@ class Session:
 def _format_treffer(immobilien: list[Immobilie]) -> str:
     if not immobilien:
         return "Aktuell habe ich leider keine passenden Inserate gefunden."
-    zeilen = [f"Ich habe {len(immobilien)} passende Inserate gefunden:"]
-    for i in immobilien:
-        zeilen.append(
-            f"- {i.titel} | {i.ort}, {i.kanton} | {i.zimmer} Zimmer | "
-            f"CHF {i.preis}.- | {i.link}"
-        )
+    mehrere = len(immobilien) > 1
+    kopf = (
+        f"Ich habe {len(immobilien)} passende Inserate gefunden:"
+        if mehrere
+        else "Ich habe folgendes passendes Inserat gefunden:"
+    )
+    zeilen = [kopf]
+    for index, i in enumerate(immobilien, start=1):
+        praefix = f"{index}. " if mehrere else "- "
+        zeile = f"{praefix}{i.titel} | {i.ort}, {i.kanton} | {i.zimmer} Zimmer | CHF {i.preis}.-"
+        if i.link and i.link != PLACEHOLDER_LINK:
+            zeile += f" | {i.link}"
+        zeilen.append(zeile)
     return "\n".join(zeilen)
+
+
+def _format_kontakt(immobilie: Immobilie, firma: Optional[Firma]) -> str:
+    """Kontaktperson des Inserats (siehe Immobilie.kontakt_*) - faellt auf
+    die Konto-Daten der Firma/Person zurueck, falls das Inserat selbst keine
+    eigene Kontaktperson hinterlegt hat (z.B. aeltere Inserate von vor
+    diesem Feature)."""
+    name = immobilie.kontakt_name or (firma.name if firma else None)
+    telefon = immobilie.kontakt_telefon or (firma.telefonnummer if firma else None)
+    email = immobilie.kontakt_email or (firma.email if firma else None)
+    if not any((name, telefon, email)):
+        return "Kontaktdaten sind fuer dieses Inserat leider nicht hinterlegt."
+    teile = [f"Kontakt: {name}" if name else "Kontakt:"]
+    if telefon:
+        teile.append(f"Tel. {telefon}")
+    if email:
+        teile.append(email)
+    return " | ".join(teile)
 
 
 def _format_criteria(criteria: SearchCriteria) -> str:
@@ -226,9 +268,11 @@ class ChatService:
         rate_limiter: Optional[RateLimiter] = None,
         outbound_sender: Optional[Callable[[str, str], None]] = None,
         image_sender: Optional[Callable[[str, str, Optional[str]], None]] = None,
+        button_sender: Optional[Callable[[str, str, list[tuple[str, str]]], None]] = None,
         firma_service: Optional[FirmaService] = None,
         chatkontakt_repo: Optional[ChatKontaktRepository] = None,
         fehlerlog_repo: Optional[FehlerLogRepository] = None,
+        schedule_delay: Optional[Callable[[float, Callable[[], None]], None]] = None,
     ):
         self._matching_engine = matching_engine
         self._immobilien_repo = immobilien_repo
@@ -253,11 +297,20 @@ class ChatService:
         # bester Suchtreffer) - analog outbound_sender, None im simulierten
         # Web-Chat.
         self._image_sender = image_sender
+        # Fuer die verzoegerte Suchabo-Rueckfrage mit Ja/Nein-Buttons (siehe
+        # _schedule_suchabo_frage) - analog outbound_sender, faellt aber auf
+        # outbound_sender (reiner Text) zurueck, falls nicht konfiguriert.
+        self._button_sender = button_sender
         # Fuer den Superadmin-Bereich (Statistiken/Fehler-Protokoll) - None,
         # wenn nicht konfiguriert (z.B. in Tests), dann bleiben die
         # entsprechenden Hooks unten einfach No-Ops.
         self._chatkontakt_repo = chatkontakt_repo
         self._fehlerlog_repo = fehlerlog_repo
+        # Testbarer Ersatz fuer "nach N Sekunden ausfuehren" (siehe
+        # _schedule_suchabo_frage) - Default nutzt einen echten Timer/Thread;
+        # Tests koennen hier synchron ausfuehren lassen, um nicht wirklich
+        # warten zu muessen.
+        self._schedule_delay = schedule_delay or self._default_schedule_delay
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
         self._dispatcher.register(self._on_match)
@@ -277,6 +330,23 @@ class ChatService:
         session.add_display("bot", f"[Bild] {caption} {image_url}")
         if self._image_sender is not None:
             self._image_sender(session.telefonnummer, image_url, caption)
+
+    def _send_proactive_button(self, session: Session, text: str, options: list[tuple[str, str]]) -> None:
+        # pending_interactive wird ERST hier (beim tatsaechlichen Versand)
+        # gesetzt, nicht schon beim Planen des verzoegerten Versands - sonst
+        # wuerde web/main.py:_process_message es faelschlich auf eine
+        # bereits zuvor zurueckgegebene, unabhaengige Antwort anwenden (siehe
+        # _schedule_suchabo_frage).
+        session.pending_interactive = InteractivePrompt("button", options)
+        session.add_display("bot", text)
+        if self._button_sender is not None:
+            self._button_sender(session.telefonnummer, text, options)
+        elif self._outbound_sender is not None:
+            self._outbound_sender(session.telefonnummer, text)
+
+    @staticmethod
+    def _default_schedule_delay(delay_seconds: float, callback: Callable[[], None]) -> None:
+        threading.Timer(delay_seconds, callback).start()
 
     def _on_match(self, kunde: Kunde, suchprofil: Suchprofil, immobilie: Immobilie) -> None:
         # get_session() statt Dict-Lookup: eine Session existiert vielleicht
@@ -592,7 +662,13 @@ class ChatService:
             hat_garten=listing.has_garden,
             status="in_pruefung",
             bilder=[],
-            link="https://example.com/inserate/neu",
+            link=PLACEHOLDER_LINK,
+            # Kontaktperson fuer Interessenten (siehe _format_kontakt) - im
+            # WhatsApp-Vermieter-Flow ist das der Chattende selbst, dessen
+            # Name/Nummer wir aus dem Flow bereits kennen, ohne extra danach
+            # zu fragen.
+            kontakt_name=session.vermieter_name,
+            kontakt_telefon=session.telefonnummer,
         )
         self._immobilien_repo.add(immobilie)
         session.listing_messages = []
@@ -608,6 +684,20 @@ class ChatService:
     # -- Mieter ----------------------------------------------------------
 
     def _handle_mieter(self, session: Session, text: str) -> list[str]:
+        if session.pending_listing_choice is not None:
+            zahl = re.search(r"\d+", text)
+            if zahl and 1 <= int(zahl.group()) <= len(session.pending_listing_choice):
+                return self._handle_listing_choice(session, text)
+            if zahl:
+                antwort = f"Bitte antworte mit einer Zahl zwischen 1 und {len(session.pending_listing_choice)}."
+                session.add_display("bot", antwort)
+                return [antwort]
+            # Keine Zahl erkennbar: vermutlich eine neue Suche statt einer
+            # Auswahl unter den gezeigten Treffern - gleiche Ueberlegung wie
+            # beim pending_criteria-Fallback unten.
+            session.pending_listing_choice = None
+            session.pending_listing_criteria = None
+
         if session.pending_search_slot is not None:
             return self._handle_pending_search_slot(session, text)
 
@@ -728,11 +818,6 @@ class ChatService:
     def _finish_search(self, session: Session, criteria: SearchCriteria) -> list[str]:
         treffer = self._matching_engine.search(criteria)
         treffer_text = _format_treffer(treffer)
-        rueckfrage = (
-            f"Moechtest du fuer '{_format_criteria(criteria)}' ein Suchabo anlegen? "
-            "Dann melde ich mich automatisch, sobald ein neues passendes Inserat "
-            "reinkommt - egal von welchem Anbieter. (ja/nein)"
-        )
         # Suche ist abgeschlossen - Rohverlauf leeren, damit eine weitere
         # Suche im selben Chat (andere Wohnung/anderer Kanton) nicht durch
         # die bereits beantworteten alten Kriterien verfaelscht wird (Claude
@@ -740,14 +825,84 @@ class ChatService:
         # vermischt ihn mit der neuen Anfrage). Analog zu
         # session.listing_messages nach einem eingereichten Inserat.
         session.claude_messages = []
-        session.pending_criteria = criteria
-        session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
 
-        for nachricht in (treffer_text, rueckfrage):
+        if not treffer:
+            rueckfrage = (
+                f"Moechtest du fuer '{_format_criteria(criteria)}' ein Suchabo anlegen? "
+                "Dann melde ich mich automatisch, sobald ein neues passendes Inserat "
+                "reinkommt - egal von welchem Anbieter. (ja/nein)"
+            )
+            session.pending_criteria = criteria
+            session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
+            for nachricht in (treffer_text, rueckfrage):
+                session.add_display("bot", nachricht)
+            return [treffer_text, rueckfrage]
+
+        if len(treffer) == 1:
+            kontakt_text = self._deliver_listing_contact(session, treffer[0])
+            kombiniert = f"{treffer_text}\n{kontakt_text}"
+            session.add_display("bot", kombiniert)
+            self._schedule_suchabo_frage(session, criteria)
+            return [kombiniert]
+
+        # Mehrere Treffer: erst auswaehlen lassen, statt Kontaktdaten fuer
+        # alle auf einmal preiszugeben (siehe _handle_listing_choice).
+        session.pending_listing_choice = [i.id for i in treffer]
+        session.pending_listing_criteria = criteria
+        session.pending_interactive = None
+        frage = f"Welches Inserat interessiert dich? Antworte mit der Nummer (1-{len(treffer)})."
+        for nachricht in (treffer_text, frage):
             session.add_display("bot", nachricht)
-        if treffer and treffer[0].bilder:
-            self._send_proactive_image(session, treffer[0].bilder[0], treffer[0].titel)
-        return [treffer_text, rueckfrage]
+        return [treffer_text, frage]
+
+    def _deliver_listing_contact(self, session: Session, immobilie: Immobilie) -> str:
+        """Gibt die Kontaktdaten-Zeile fuer ein einzelnes Inserat zurueck,
+        verschickt dessen Bild (falls vorhanden) proaktiv und legt einen Lead
+        an - der Kunde hat durch das Erreichen dieses Punktes (Treffer
+        gesehen bzw. bewusst ausgewaehlt) sein Interesse bereits gezeigt."""
+        firma = self._firma_repo.get_by_id(immobilie.firma_id) if immobilie.firma_id else None
+        kontakt_text = _format_kontakt(immobilie, firma)
+        if self._lead_repo is not None and immobilie.firma_id is not None:
+            self._lead_repo.add(Lead(immobilie_id=immobilie.id, firma_id=immobilie.firma_id))
+        if immobilie.bilder:
+            self._send_proactive_image(session, immobilie.bilder[0], immobilie.titel)
+        return kontakt_text
+
+    def _handle_listing_choice(self, session: Session, text: str) -> list[str]:
+        ids = session.pending_listing_choice
+        criteria = session.pending_listing_criteria
+        index = int(re.search(r"\d+", text).group()) - 1
+        session.pending_listing_choice = None
+        session.pending_listing_criteria = None
+
+        immobilie = self._immobilien_repo.get_by_id(ids[index])
+        if immobilie is None:
+            antwort = "Dieses Inserat ist leider nicht mehr verfuegbar. Sag mir einfach, wenn du nochmal suchen willst."
+            session.add_display("bot", antwort)
+            return [antwort]
+
+        kontakt_text = self._deliver_listing_contact(session, immobilie)
+        session.add_display("bot", kontakt_text)
+        self._schedule_suchabo_frage(session, criteria)
+        return [kontakt_text]
+
+    def _schedule_suchabo_frage(self, session: Session, criteria: SearchCriteria) -> None:
+        """Fragt (verzoegert, siehe SUCHABO_FRAGE_DELAY_SECONDS) an, ob fuer
+        die Suche ein laufendes Suchabo angelegt werden soll. Der Ja/Nein-
+        "Gate"-Zustand wird SOFORT gesetzt (ein schneller Folgetext des
+        Kunden soll bereits richtig behandelt werden), nur der eigentliche
+        Versand der Frage kommt verzoegert - sonst ueberholt sie regelmaessig
+        das separat verschickte Bild/die Kontaktzeile."""
+        session.pending_criteria = criteria
+        text = (
+            f"Moechtest du fuer '{_format_criteria(criteria)}' ausserdem ein Suchabo anlegen? "
+            "Dann melde ich mich automatisch, sobald ein neues passendes Inserat reinkommt - "
+            "egal von welchem Anbieter. (ja/nein)"
+        )
+        self._schedule_delay(
+            SUCHABO_FRAGE_DELAY_SECONDS,
+            lambda: self._send_proactive_button(session, text, JA_NEIN_OPTIONS),
+        )
 
     def _handle_pending_confirmation(self, session: Session, text: str) -> str:
         antwort = text.strip().lower()

@@ -184,7 +184,17 @@ class FirmaService:
             raise FirmaAuthError(str(exc)) from exc
 
     def create_inserat(self, firma: Firma, immobilie: Immobilie) -> Immobilie:
-        immobilie = immobilie.model_copy(update={"firma_id": firma.id})
+        # Kontaktperson faellt auf die Konto-Daten der Firma zurueck, solange
+        # das Firmen-Portal-Formular keine eigene Kontaktperson pro Inserat
+        # abfragt (siehe app/models.py: Immobilie.kontakt_*).
+        immobilie = immobilie.model_copy(
+            update={
+                "firma_id": firma.id,
+                "kontakt_name": immobilie.kontakt_name or firma.name,
+                "kontakt_telefon": immobilie.kontakt_telefon or firma.telefonnummer,
+                "kontakt_email": immobilie.kontakt_email or firma.email,
+            }
+        )
         with tenant_session(firma_id=firma.id) as session:
             session.add(ImmobilieORM(**immobilie.model_dump()))
         return immobilie

@@ -99,6 +99,9 @@ def _immobilie_from_orm(row: ImmobilieORM) -> Immobilie:
         status=row.status,
         bilder=row.bilder or [],
         link=row.link,
+        kontakt_name=row.kontakt_name,
+        kontakt_telefon=row.kontakt_telefon,
+        kontakt_email=row.kontakt_email,
         inseriert_am=row.inseriert_am,
     )
 

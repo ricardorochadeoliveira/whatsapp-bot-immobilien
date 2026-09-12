@@ -95,6 +95,14 @@ class Immobilie(BaseModel):
     status: str = "aktiv"  # "aktiv" | "in_pruefung" | "deaktiviert"
     bilder: list[str] = Field(default_factory=list)
     link: str
+    # Kontaktperson fuer Interessenten - eigenstaendig pro Inserat (nicht
+    # zwingend identisch mit dem Firma-Konto, z.B. bei einer Hausverwaltung
+    # mit mehreren Objekten/Verwaltern). Aeltere Inserate ohne dieses Feld
+    # fallen beim Anzeigen auf die Firma-Kontodaten zurueck, siehe
+    # app/chat_service.py:_format_kontakt.
+    kontakt_name: Optional[str] = None
+    kontakt_telefon: Optional[str] = None
+    kontakt_email: Optional[str] = None
     inseriert_am: datetime = Field(default_factory=_now)
 
 

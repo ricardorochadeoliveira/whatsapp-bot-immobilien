@@ -79,6 +79,9 @@ class ImmobilieORM(Base):
     status: Mapped[str] = mapped_column(String(16), default="aktiv", nullable=False)
     bilder: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     link: Mapped[str] = mapped_column(String(512), nullable=False)
+    kontakt_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    kontakt_telefon: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    kontakt_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     inseriert_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
