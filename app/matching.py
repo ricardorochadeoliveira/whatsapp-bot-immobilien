@@ -12,8 +12,19 @@ from app.models import Immobilie, SearchCriteria, Suchprofil
 from app.repository import ImmobilienRepository
 
 
+# Kanton/Ort werden mal mit Umlaut ("Zürich"), mal in ASCII-Transliteration
+# ("Zuerich") erfasst - je nachdem, ob die Schreibweise vom Nutzer uebernommen
+# oder von Claude "normalisiert" wurde (die Suchtool-Beschreibung in
+# app/intent_extraction.py nennt explizit "Zuerich" als Beispiel). Ohne diese
+# Umlaut-Faltung galt "Zürich" != "Zuerich" und ein real existierendes,
+# exakt passendes Inserat wurde stillschweigend nicht gefunden.
+_UMLAUT_MAP = str.maketrans(
+    {"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"}
+)
+
+
 def _normalize(value: str) -> str:
-    return value.strip().lower()
+    return value.strip().translate(_UMLAUT_MAP).lower()
 
 
 def matches(immobilie: Immobilie, criteria: SearchCriteria) -> bool:
