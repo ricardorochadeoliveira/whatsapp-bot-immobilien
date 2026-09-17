@@ -45,6 +45,16 @@
   #chatState { margin-top: var(--space-3); }
   #chatTestOutput, #chatDiff { max-height: 280px; overflow: auto; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius); padding: var(--space-2); font-family: 'Courier New', monospace; font-size: 12px; white-space: pre; margin-top: 6px; }
   #chatPushRow { display: none; margin-top: var(--space-2); }
+
+  /* Chat-Einblick */
+  .chat-einblick-layout { display: flex; gap: var(--space-3); margin-top: var(--space-2); flex-wrap: wrap; }
+  .chat-einblick-kontakte { flex: 1; min-width: 220px; max-height: 420px; overflow-y: auto; }
+  .chat-einblick-kontakte tr { cursor: pointer; }
+  .chat-einblick-kontakte tr:hover { background: var(--color-bg); }
+  .chat-einblick-kontakte tr.aktiv { background: var(--color-bg); font-weight: 600; }
+  .chat-einblick-verlauf { flex: 2; min-width: 260px; }
+  #chatVerlaufThread { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: var(--space-2); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius); margin-top: 6px; }
+  #chatVerlaufThread .bubble { max-width: 84%; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -94,6 +104,24 @@
       <thead><tr><th>Zeitpunkt</th><th>Quelle</th><th>Telefonnummer</th><th>Meldung</th></tr></thead>
       <tbody></tbody>
     </table>
+  </div>
+
+  <div class="card">
+    <div class="topbar">
+      <h2 style="margin:0;">Chat-Einblick</h2>
+      <button class="secondary" onclick="loadChatContacts()">Aktualisieren</button>
+    </div>
+    <div class="hint">Echte Kundenkonversationen einsehen - was der Kunde geschrieben und was der Bot geantwortet hat, um frühzeitig Fehlverhalten zu erkennen.</div>
+    <div class="chat-einblick-layout">
+      <table class="chat-einblick-kontakte" id="chatKontakteTable">
+        <thead><tr><th>Telefonnummer</th><th>Zuletzt aktiv</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="chat-einblick-verlauf">
+        <div class="hint" id="chatVerlaufTitel">Kontakt auswählen, um den Verlauf zu sehen.</div>
+        <div id="chatVerlaufThread"></div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -196,6 +224,7 @@ async function showDashboard(email) {
   document.getElementById('superadminEmail').textContent = email || '';
   await loadStats();
   await loadFehler();
+  await loadChatContacts();
   await loadChatState();
 }
 
@@ -250,6 +279,64 @@ async function loadFehler() {
     }
     tbody.appendChild(tr);
   }
+}
+
+let aktiverChatKontakt = null;
+
+async function loadChatContacts() {
+  const res = await authFetch('/api/superadmin/chats?limit=200');
+  if (!res.ok) return;
+  const items = await res.json();
+  const tbody = document.querySelector('#chatKontakteTable tbody');
+  tbody.innerHTML = '';
+  if (items.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 2;
+    td.textContent = 'Noch keine Kontakte.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const k of items) {
+    const tr = document.createElement('tr');
+    if (k.telefonnummer === aktiverChatKontakt) tr.className = 'aktiv';
+    tr.onclick = () => {
+      document.querySelectorAll('#chatKontakteTable tbody tr').forEach((r) => r.classList.remove('aktiv'));
+      tr.classList.add('aktiv');
+      loadChatVerlauf(k.telefonnummer);
+    };
+    const zeit = new Date(k.letzte_aktivitaet_am).toLocaleString('de-CH');
+    for (const val of [k.telefonnummer, zeit]) {
+      const td = document.createElement('td');
+      td.textContent = val;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadChatVerlauf(telefonnummer) {
+  aktiverChatKontakt = telefonnummer;
+  document.getElementById('chatVerlaufTitel').textContent = `Verlauf: ${telefonnummer}`;
+  const thread = document.getElementById('chatVerlaufThread');
+  thread.innerHTML = 'Lädt...';
+
+  const res = await authFetch(`/api/superadmin/chats/nachrichten?telefonnummer=${encodeURIComponent(telefonnummer)}`);
+  if (!res.ok) { thread.textContent = 'Fehler beim Laden.'; return; }
+  const items = await res.json();
+  thread.innerHTML = '';
+  if (items.length === 0) {
+    thread.textContent = 'Keine gespeicherten Nachrichten für diese Nummer.';
+    return;
+  }
+  for (const n of items) {
+    const div = document.createElement('div');
+    div.className = n.rolle === 'user' ? 'bubble bubble-user' : 'bubble bubble-bot';
+    div.textContent = n.text;
+    thread.appendChild(div);
+  }
+  thread.scrollTop = thread.scrollHeight;
 }
 
 function renderChatThread(displayMessages) {

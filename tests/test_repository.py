@@ -1,6 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
-from app.repository import InMemoryChatKontaktRepository, InMemoryFehlerLogRepository
+from app.repository import (
+    InMemoryChatKontaktRepository,
+    InMemoryChatverlaufRepository,
+    InMemoryFehlerLogRepository,
+)
 
 
 def test_record_activity_legt_neuen_kontakt_an():
@@ -42,3 +46,39 @@ def test_fehlerlog_get_recent_respektiert_limit():
     for i in range(5):
         repo.add("quelle", f"Meldung {i}")
     assert len(repo.get_recent(limit=2)) == 2
+
+
+def test_chatkontakt_get_all_sortiert_nach_letzter_aktivitaet():
+    repo = InMemoryChatKontaktRepository()
+    repo.record_activity("+41790000001")
+    repo.record_activity("+41790000002")
+    repo.record_activity("+41790000001")  # zuletzt aktiv
+
+    kontakte = repo.get_all()
+
+    assert [k.telefonnummer for k in kontakte] == ["+41790000001", "+41790000002"]
+
+
+def test_chatverlauf_add_und_get_by_telefonnummer():
+    repo = InMemoryChatverlaufRepository()
+    repo.add("+41790000001", "user", "Ich suche eine Wohnung")
+    repo.add("+41790000001", "bot", "In welchem Kanton?")
+    repo.add("+41790000002", "user", "Andere Nummer")
+
+    verlauf = repo.get_by_telefonnummer("+41790000001")
+
+    assert [(n.rolle, n.text) for n in verlauf] == [
+        ("user", "Ich suche eine Wohnung"),
+        ("bot", "In welchem Kanton?"),
+    ]
+
+
+def test_chatverlauf_get_by_telefonnummer_respektiert_limit_und_reihenfolge():
+    repo = InMemoryChatverlaufRepository()
+    for i in range(5):
+        repo.add("+41790000001", "user", f"Nachricht {i}")
+
+    verlauf = repo.get_by_telefonnummer("+41790000001", limit=2)
+
+    # Die NEUESTEN im Limit, aber weiterhin chronologisch geordnet.
+    assert [n.text for n in verlauf] == ["Nachricht 3", "Nachricht 4"]

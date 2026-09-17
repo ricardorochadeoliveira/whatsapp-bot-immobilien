@@ -19,9 +19,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.db import tenant_session
-from app.models import ChatKontakt, FehlerLog, Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
+from app.models import ChatKontakt, ChatNachricht, FehlerLog, Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
 from app.models_orm import (
     ChatKontaktORM,
+    ChatNachrichtORM,
     FehlerLogORM,
     FirmaORM,
     ImmobilieORM,
@@ -32,6 +33,7 @@ from app.models_orm import (
 )
 from app.repository import (
     ChatKontaktRepository,
+    ChatverlaufRepository,
     FehlerLogRepository,
     FirmaRepository,
     ImmobilienRepository,
@@ -360,6 +362,57 @@ class SupabaseChatKontaktRepository(ChatKontaktRepository):
                 select(ChatKontaktORM).where(ChatKontaktORM.letzte_aktivitaet_am >= seit)
             ).all()
             return len(rows)
+
+    def get_all(self, limit: int = 200) -> list[ChatKontakt]:
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(ChatKontaktORM).order_by(ChatKontaktORM.letzte_aktivitaet_am.desc()).limit(limit)
+            ).all()
+            return [
+                ChatKontakt(
+                    id=r.id,
+                    telefonnummer=r.telefonnummer,
+                    erstellt_am=r.erstellt_am,
+                    letzte_aktivitaet_am=r.letzte_aktivitaet_am,
+                )
+                for r in rows
+            ]
+
+
+class SupabaseChatverlaufRepository(ChatverlaufRepository):
+    def __init__(self, session_factory: sessionmaker):
+        self._session_factory = session_factory
+
+    def add(self, telefonnummer: str, rolle: str, text: str) -> ChatNachricht:
+        eintrag = ChatNachricht(telefonnummer=telefonnummer, rolle=rolle, text=text)
+        with self._session_factory() as session:
+            session.add(ChatNachrichtORM(**eintrag.model_dump()))
+            session.commit()
+        return eintrag
+
+    def get_by_telefonnummer(self, telefonnummer: str, limit: int = 500) -> list[ChatNachricht]:
+        with self._session_factory() as session:
+            # DESC + limit, dann umdrehen: bei einer sehr langen Historie
+            # sollen die NEUESTEN Nachrichten im Limit landen (nicht die
+            # aeltesten), aber trotzdem in chronologischer Lesereihenfolge
+            # zurueckgegeben werden.
+            rows = session.scalars(
+                select(ChatNachrichtORM)
+                .where(ChatNachrichtORM.telefonnummer == telefonnummer)
+                .order_by(ChatNachrichtORM.erstellt_am.desc())
+                .limit(limit)
+            ).all()
+            eintraege = [
+                ChatNachricht(
+                    id=r.id,
+                    telefonnummer=r.telefonnummer,
+                    rolle=r.rolle,
+                    text=r.text,
+                    erstellt_am=r.erstellt_am,
+                )
+                for r in rows
+            ]
+            return list(reversed(eintraege))
 
 
 class SupabaseFehlerLogRepository(FehlerLogRepository):

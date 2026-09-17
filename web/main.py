@@ -813,6 +813,34 @@ def superadmin_fehler(limit: int = 200) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Chat-Einblick: echte Kundenkonversationen einsehen (Kunde+Bot), um frueh
+# Fehlverhalten des Bots zu erkennen - siehe app/repository.py:
+# ChatverlaufRepository. Telefonnummer als Query-Param statt Pfad-Segment,
+# da sie ein "+" enthaelt.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/superadmin/chats", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_chats(limit: int = 100) -> list[dict]:
+    return [
+        {
+            "telefonnummer": k.telefonnummer,
+            "erstellt_am": k.erstellt_am.isoformat(),
+            "letzte_aktivitaet_am": k.letzte_aktivitaet_am.isoformat(),
+        }
+        for k in context.chatkontakt_repo.get_all(limit)
+    ]
+
+
+@app.get("/api/superadmin/chats/nachrichten", dependencies=SUPERADMIN_PROTECTED)
+def superadmin_chat_nachrichten(telefonnummer: str, limit: int = 500) -> list[dict]:
+    return [
+        {"rolle": n.rolle, "text": n.text, "erstellt_am": n.erstellt_am.isoformat()}
+        for n in context.chatverlauf_repo.get_by_telefonnummer(telefonnummer, limit)
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Entwickler-Chat (siehe app/code_assistant.py) - EIN gemeinsamer, laufender
 # Chat fuer alle Superadmins. Claude liest/schreibt Code selbst, Tests
 # entscheiden ueber "push-bereit", Push bleibt ein eigener, expliziter Schritt.

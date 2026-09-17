@@ -69,10 +69,12 @@ def _build_button_sender(fehlerlog_repo) -> Callable[[str, str, list], None]:
     return _send
 from app.repository import (
     ChatKontaktRepository,
+    ChatverlaufRepository,
     FehlerLogRepository,
     FirmaRepository,
     ImmobilienRepository,
     InMemoryChatKontaktRepository,
+    InMemoryChatverlaufRepository,
     InMemoryFehlerLogRepository,
     InMemoryFirmaRepository,
     InMemoryImmobilienRepository,
@@ -97,6 +99,7 @@ def _build_repos() -> tuple[
     FirmaRepository,
     ChatKontaktRepository,
     FehlerLogRepository,
+    ChatverlaufRepository,
 ]:
     if not get_database_url():
         return (
@@ -108,11 +111,13 @@ def _build_repos() -> tuple[
             InMemoryFirmaRepository(),
             InMemoryChatKontaktRepository(),
             InMemoryFehlerLogRepository(),
+            InMemoryChatverlaufRepository(),
         )
 
     from app.models_orm import Base
     from app.repository_supabase import (
         SupabaseChatKontaktRepository,
+        SupabaseChatverlaufRepository,
         SupabaseFehlerLogRepository,
         SupabaseFirmaRepository,
         SupabaseImmobilienRepository,
@@ -146,6 +151,7 @@ def _build_repos() -> tuple[
         firma_repo,
         SupabaseChatKontaktRepository(session_factory),
         SupabaseFehlerLogRepository(session_factory),
+        SupabaseChatverlaufRepository(session_factory),
     )
 
 
@@ -193,6 +199,7 @@ class AppContext:
             self.firma_repo,
             self.chatkontakt_repo,
             self.fehlerlog_repo,
+            self.chatverlauf_repo,
         ) = _build_repos()
 
         # FirmaService (Login/Signup/Firmen-Portal) braucht die eingeschraenkte
@@ -237,6 +244,7 @@ class AppContext:
             firma_service=self.firma_service,
             chatkontakt_repo=self.chatkontakt_repo,
             fehlerlog_repo=self.fehlerlog_repo,
+            chatverlauf_repo=self.chatverlauf_repo,
         )
 
 

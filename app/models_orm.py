@@ -105,6 +105,16 @@ class ChatKontaktORM(Base):
     letzte_aktivitaet_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ChatNachrichtORM(Base):
+    __tablename__ = "chat_nachricht"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    telefonnummer: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    rolle: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str] = mapped_column(String, nullable=False)
+    erstellt_am: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class FehlerLogORM(Base):
     __tablename__ = "fehler_log"
 

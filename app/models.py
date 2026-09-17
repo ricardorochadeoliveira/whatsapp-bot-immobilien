@@ -130,6 +130,22 @@ class ChatKontakt(BaseModel):
     letzte_aktivitaet_am: datetime = Field(default_factory=_now)
 
 
+class ChatNachricht(BaseModel):
+    """Einzelne Nachricht (Kunde ODER Bot) aus einem echten WhatsApp-Chat -
+    Grundlage fuer den Chat-Einblick im Superadmin-Bereich (fruehzeitig
+    Fehlverhalten des Bots erkennen). Wird bei jeder Nachricht persistiert,
+    die auch im In-Memory-Verlauf landet (siehe app/chat_service.py:
+    Session.add_display) - im Unterschied zu diesem ueberlebt sie einen
+    Neustart/Redeploy. Waehrend des Passwort-Schritts im Vermieter-Flow wird
+    hier (wie im In-Memory-Verlauf) niemals der Klartext gespeichert."""
+
+    id: str = Field(default_factory=_new_id)
+    telefonnummer: str
+    rolle: str  # "user" | "bot"
+    text: str
+    erstellt_am: datetime = Field(default_factory=_now)
+
+
 class FehlerLog(BaseModel):
     """Protokolliert Fehler, die waehrend einer echten Kundeninteraktion
     auftreten (z.B. WhatsApp-Versand fehlgeschlagen, Claude-API nicht

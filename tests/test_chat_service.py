@@ -17,6 +17,7 @@ from app.notifications import NotificationDispatcher
 from app.rate_limiter import RateLimiter
 from app.repository import (
     InMemoryChatKontaktRepository,
+    InMemoryChatverlaufRepository,
     InMemoryFehlerLogRepository,
     InMemoryFirmaRepository,
     InMemoryImmobilienRepository,
@@ -42,6 +43,7 @@ def make_service(
     firma_repo=None,
     chatkontakt_repo=None,
     fehlerlog_repo=None,
+    chatverlauf_repo=None,
     schedule_delay=_run_immediately,
 ):
     immobilien_repo = InMemoryImmobilienRepository(seed=build_seed_immobilien())
@@ -64,6 +66,7 @@ def make_service(
         firma_service=firma_service,
         chatkontakt_repo=chatkontakt_repo,
         fehlerlog_repo=fehlerlog_repo,
+        chatverlauf_repo=chatverlauf_repo,
         schedule_delay=schedule_delay,
     )
     return service, suchprofil_repo, immobilien_repo, firma_repo, lead_repo
@@ -301,6 +304,56 @@ def test_passwort_landet_nie_im_klartext_im_chatverlauf():
     verlauf = [m["text"] for m in service.get_session(phone).display_messages]
     assert "GeheimesPasswort1" not in verlauf
     assert "••••••••" in verlauf
+
+
+# -- Chat-Einblick fuer Superadmin (Chatverlauf-Persistenz) ------------------
+
+
+def test_nachrichten_werden_im_chatverlauf_repo_persistiert():
+    chatverlauf_repo = InMemoryChatverlaufRepository()
+    service, *_ = make_service(chatverlauf_repo=chatverlauf_repo)
+    phone = "+41790000046"
+
+    service.handle_message(phone, "hallo")
+
+    verlauf = chatverlauf_repo.get_by_telefonnummer(phone)
+    assert [(n.rolle, n.text) for n in verlauf] == [
+        ("user", "hallo"),
+        ("bot", service.get_session(phone).display_messages[-1]["text"]),
+    ]
+
+
+def test_passwort_landet_nie_im_klartext_im_persistierten_chatverlauf():
+    """Wie test_passwort_landet_nie_im_klartext_im_chatverlauf, aber fuer
+    die dauerhafte Persistenz (app/repository.py: ChatverlaufRepository) -
+    genauso sicherheitskritisch, da diese Daten einen Neustart ueberleben
+    und im Superadmin-Bereich einsehbar sind."""
+    chatverlauf_repo = InMemoryChatverlaufRepository()
+    firma_service = FirmaService(InMemoryFirmaRepository())
+    service, *_ = make_service(firma_service=firma_service, chatverlauf_repo=chatverlauf_repo)
+    phone = "+41790000047"
+    _bis_email_frage(service, phone)
+    service.handle_message(phone, "vermieter@example.com")
+
+    with patch.object(firma_service_module, "sign_up", return_value={"id": "auth-user-789"}):
+        service.handle_message(phone, "GeheimesPasswort1")
+
+    persistierte_texte = [n.text for n in chatverlauf_repo.get_by_telefonnummer(phone)]
+    assert "GeheimesPasswort1" not in persistierte_texte
+    assert "••••••••" in persistierte_texte
+
+
+def test_chatverlauf_persistenz_fehler_bricht_chat_nicht_ab():
+    kaputtes_repo = MagicMock()
+    kaputtes_repo.add.side_effect = RuntimeError("DB nicht erreichbar")
+    fehlerlog_repo = InMemoryFehlerLogRepository()
+    service, *_ = make_service(chatverlauf_repo=kaputtes_repo, fehlerlog_repo=fehlerlog_repo)
+    phone = "+41790000048"
+
+    antworten = service.handle_message(phone, "hallo")
+
+    assert antworten  # Chat funktioniert trotz kaputter Persistenz weiter
+    assert len(fehlerlog_repo.get_recent()) >= 1
 
 
 def test_firma_auth_error_fuehrt_zurueck_zur_email_frage():

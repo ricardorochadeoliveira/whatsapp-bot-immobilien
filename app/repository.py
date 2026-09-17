@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.models import ChatKontakt, FehlerLog, Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
+from app.models import ChatKontakt, ChatNachricht, FehlerLog, Firma, Immobilie, Kunde, Lead, MatchLog, Suchprofil
 
 
 class FirmaRepository(ABC):
@@ -113,6 +113,9 @@ class ChatKontaktRepository(ABC):
     @abstractmethod
     def count_active_since(self, seit: datetime) -> int: ...
 
+    @abstractmethod
+    def get_all(self, limit: int = 200) -> list[ChatKontakt]: ...
+
 
 class FehlerLogRepository(ABC):
     @abstractmethod
@@ -120,6 +123,19 @@ class FehlerLogRepository(ABC):
 
     @abstractmethod
     def get_recent(self, limit: int = 200) -> list[FehlerLog]: ...
+
+
+class ChatverlaufRepository(ABC):
+    """Persistiert einzelne Chat-Nachrichten (Kunde/Bot) - im Unterschied zu
+    ChatKontakt (nur Telefonnummer + Aktivitaet) wird hier der tatsaechliche
+    Inhalt gespeichert, damit ein Superadmin echte Konversationen im
+    Nachhinein einsehen kann (siehe web/main.py: /api/superadmin/chats)."""
+
+    @abstractmethod
+    def add(self, telefonnummer: str, rolle: str, text: str) -> ChatNachricht: ...
+
+    @abstractmethod
+    def get_by_telefonnummer(self, telefonnummer: str, limit: int = 500) -> list[ChatNachricht]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +292,24 @@ class InMemoryChatKontaktRepository(ChatKontaktRepository):
 
     def count_active_since(self, seit: datetime) -> int:
         return sum(1 for k in self._by_phone.values() if k.letzte_aktivitaet_am >= seit)
+
+    def get_all(self, limit: int = 200) -> list[ChatKontakt]:
+        kontakte = sorted(self._by_phone.values(), key=lambda k: k.letzte_aktivitaet_am, reverse=True)
+        return kontakte[:limit]
+
+
+class InMemoryChatverlaufRepository(ChatverlaufRepository):
+    def __init__(self):
+        self._items: list[ChatNachricht] = []
+
+    def add(self, telefonnummer: str, rolle: str, text: str) -> ChatNachricht:
+        eintrag = ChatNachricht(telefonnummer=telefonnummer, rolle=rolle, text=text)
+        self._items.append(eintrag)
+        return eintrag
+
+    def get_by_telefonnummer(self, telefonnummer: str, limit: int = 500) -> list[ChatNachricht]:
+        eintraege = [n for n in self._items if n.telefonnummer == telefonnummer]
+        return eintraege[-limit:]
 
 
 class InMemoryFehlerLogRepository(FehlerLogRepository):

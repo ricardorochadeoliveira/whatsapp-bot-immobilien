@@ -20,6 +20,7 @@ Vermieter-Ablauf (Firma ODER Privatperson, kein Login):
 """
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ from app.notifications import NotificationDispatcher
 from app.rate_limiter import RateLimiter, build_default_rate_limiter
 from app.repository import (
     ChatKontaktRepository,
+    ChatverlaufRepository,
     FehlerLogRepository,
     FirmaRepository,
     ImmobilienRepository,
@@ -44,6 +46,8 @@ from app.repository import (
     LeadRepository,
     SuchprofilRepository,
 )
+
+logger = logging.getLogger("immo_bot.chat_service")
 
 JA_WOERTER = {"ja", "j", "yes", "y", "klar", "gerne", "genau"}
 NEIN_WOERTER = {"nein", "n", "no", "nope"}
@@ -198,15 +202,26 @@ class Session:
     # "gefragt, Antwort war Egal" unterscheiden und die Frage wuerde sich
     # wiederholen (siehe _next_missing_search_slot).
     resolved_search_slots: set = field(default_factory=set)
+    # Optionaler Persistenz-Hook, von ChatService.get_session() gesetzt
+    # (siehe app/repository.py: ChatverlaufRepository) - kein dataclass-
+    # Vergleich/-Repr, da es eine gebundene Funktion ist. add_display() ist
+    # der EINE Ort, an dem wirklich jede Nachricht (Kunde/Bot, synchron UND
+    # proaktiv/verzoegert) durchlaeuft - genau deshalb wird hier persistiert
+    # statt an den vielen einzelnen Aufrufstellen.
+    on_message: Optional[Callable[[str, str], None]] = field(default=None, repr=False, compare=False)
 
     def add_display(self, role: str, text: str) -> None:
         self.display_messages.append({"role": role, "text": text})
+        if self.on_message is not None:
+            self.on_message(role, text)
 
     def reset(self) -> None:
         telefonnummer = self.telefonnummer
         display_messages = self.display_messages
+        on_message = self.on_message
         self.__init__(telefonnummer=telefonnummer)  # type: ignore[misc]
         self.display_messages = display_messages
+        self.on_message = on_message
 
 
 def _format_treffer(immobilien: list[Immobilie]) -> str:
@@ -272,6 +287,7 @@ class ChatService:
         firma_service: Optional[FirmaService] = None,
         chatkontakt_repo: Optional[ChatKontaktRepository] = None,
         fehlerlog_repo: Optional[FehlerLogRepository] = None,
+        chatverlauf_repo: Optional[ChatverlaufRepository] = None,
         schedule_delay: Optional[Callable[[float, Callable[[], None]], None]] = None,
     ):
         self._matching_engine = matching_engine
@@ -306,6 +322,11 @@ class ChatService:
         # entsprechenden Hooks unten einfach No-Ops.
         self._chatkontakt_repo = chatkontakt_repo
         self._fehlerlog_repo = fehlerlog_repo
+        # Fuer den Chat-Einblick im Superadmin-Bereich - persistiert jede
+        # Nachricht (siehe Session.on_message/add_display), damit sie einen
+        # Neustart/Redeploy ueberlebt. None (z.B. in Tests) = keine
+        # Persistenz, der In-Memory-Verlauf funktioniert unveraendert weiter.
+        self._chatverlauf_repo = chatverlauf_repo
         # Testbarer Ersatz fuer "nach N Sekunden ausfuehren" (siehe
         # _schedule_suchabo_frage) - Default nutzt einen echten Timer/Thread;
         # Tests koennen hier synchron ausfuehren lassen, um nicht wirklich
@@ -317,8 +338,19 @@ class ChatService:
 
     def get_session(self, telefonnummer: str) -> Session:
         if telefonnummer not in self._sessions:
-            self._sessions[telefonnummer] = Session(telefonnummer=telefonnummer)
+            session = Session(telefonnummer=telefonnummer)
+            if self._chatverlauf_repo is not None:
+                session.on_message = lambda role, text, tel=telefonnummer: self._persist_message(tel, role, text)
+            self._sessions[telefonnummer] = session
         return self._sessions[telefonnummer]
+
+    def _persist_message(self, telefonnummer: str, rolle: str, text: str) -> None:
+        try:
+            self._chatverlauf_repo.add(telefonnummer, rolle, text)
+        except Exception as exc:  # Persistenz darf den Chat nie zum Absturz bringen
+            logger.exception("Chatverlauf-Persistenz fuer %s fehlgeschlagen", telefonnummer)
+            if self._fehlerlog_repo is not None:
+                self._fehlerlog_repo.add("chatverlauf_persist", str(exc), telefonnummer=telefonnummer)
 
     def _send_proactive(self, session: Session, text: str) -> None:
         session.add_display("bot", text)
