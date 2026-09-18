@@ -252,7 +252,7 @@ def _format_kontakt(immobilie: Immobilie, firma: Optional[Firma]) -> str:
     telefon = immobilie.kontakt_telefon or (firma.telefonnummer if firma else None)
     email = immobilie.kontakt_email or (firma.email if firma else None)
     if not any((name, telefon, email)):
-        return "Kontaktdaten sind fuer dieses Inserat leider nicht hinterlegt."
+        return "Kontaktdaten sind für dieses Inserat leider nicht hinterlegt."
     teile = [f"Kontakt: {name}" if name else "Kontakt:"]
     if telefon:
         teile.append(f"Tel. {telefon}")
@@ -387,7 +387,7 @@ class ChatService:
         # Benachrichtigung darf dadurch nicht stillschweigend verloren gehen.
         session = self.get_session(kunde.telefonnummer)
         text = (
-            f"🔔 Neues Inserat fuer dein Suchabo ({_format_criteria(suchprofil_to_criteria(suchprofil))}): "
+            f"🔔 Neues Inserat für dein Suchabo ({_format_criteria(suchprofil_to_criteria(suchprofil))}): "
             f"{immobilie.titel} | {immobilie.ort}, {immobilie.kanton} | "
             f"{immobilie.zimmer} Zimmer | CHF {immobilie.preis}.- | {immobilie.link}"
         )
@@ -432,7 +432,7 @@ class ChatService:
         if len(text) > MAX_MESSAGE_LENGTH:
             antwort = (
                 f"Deine Nachricht ist zu lang (max. {MAX_MESSAGE_LENGTH} Zeichen). "
-                "Bitte fass dich kuerzer."
+                "Kannst du sie etwas kürzer fassen?"
             )
             session.add_display("user", text[:MAX_MESSAGE_LENGTH] + "…")
             session.add_display("bot", antwort)
@@ -446,7 +446,7 @@ class ChatService:
 
         if text.strip().lower() in RESET_WOERTER:
             session.reset()
-            antwort = "Alles zurueckgesetzt. " + self._ask_role(session)
+            antwort = "Alles klar, wir fangen nochmal von vorne an. " + self._ask_role(session)
             session.add_display("bot", antwort)
             return [antwort]
 
@@ -516,7 +516,7 @@ class ChatService:
 
     LISTING_PROMPT = (
         "Jetzt beschreib mir dein Inserat in einem Satz "
-        "(Titel, Zimmer, Ort, Kanton, Preis, Miete oder Kauf, Flaeche in m2)."
+        "(Titel, Zimmer, Ort, Kanton, Preis, Miete oder Kauf, Fläche in m²)."
     )
 
     def _start_vermieter_flow(self, session: Session) -> list[str]:
@@ -532,15 +532,15 @@ class ChatService:
             session.vermieter_firma_id = bestehende_firma.id
             session.vermieter_typ = bestehende_firma.typ
             session.vermieter_step = "done"
-            antwort = f"Willkommen zurueck, {bestehende_firma.name}! {self.LISTING_PROMPT}"
+            antwort = f"Willkommen zurück, {bestehende_firma.name}! {self.LISTING_PROMPT}"
             session.add_display("bot", antwort)
             return [antwort]
 
         session.vermieter_step = "website_or_chat"
         antwort = (
-            "Moechtest du dein Inserat lieber direkt auf unserer Webseite "
+            "Möchtest du dein Inserat lieber direkt auf unserer Webseite "
             "erstellen? Das geht oft schneller: wohnchat.ch/firma.html. Oder "
-            "ich fuehre dich hier im Chat durch die Erfassung - dann richte "
+            "ich führe dich hier im Chat durch die Erfassung - dann richte "
             "ich dir dabei gleich ein Konto ein, mit dem du dich auch auf der "
             "Webseite einloggen kannst."
         )
@@ -612,7 +612,7 @@ class ChatService:
 
         session.vermieter_step = "email"
         antwort = (
-            "Danke! Damit du dein Inserat auch spaeter verwalten und dich "
+            "Danke! Damit du dein Inserat auch später verwalten und dich "
             "ebenfalls auf der Webseite einloggen kannst, richte ich dir "
             "gleich ein Konto ein. Wie lautet deine E-Mail-Adresse?"
         )
@@ -622,12 +622,12 @@ class ChatService:
     def _handle_vermieter_email_step(self, session: Session, text: str) -> list[str]:
         email = text.strip()
         if not EMAIL_PATTERN.match(email):
-            antwort = "Das sieht nicht nach einer gueltigen E-Mail-Adresse aus. Wie lautet deine E-Mail-Adresse?"
+            antwort = "Das sieht nicht nach einer gültigen E-Mail-Adresse aus. Wie lautet deine E-Mail-Adresse?"
             session.add_display("bot", antwort)
             return [antwort]
         session.vermieter_email = email
         session.vermieter_step = "password"
-        antwort = "Und jetzt noch ein Passwort fuer dein Konto (mindestens 8 Zeichen, mit Buchstabe und Ziffer)."
+        antwort = "Und jetzt noch ein Passwort für dein Konto (mindestens 8 Zeichen, mit Buchstabe und Ziffer)."
         session.add_display("bot", antwort)
         return [antwort]
 
@@ -706,9 +706,9 @@ class ChatService:
         session.listing_messages = []
 
         antwort = (
-            f"✅ Danke! Dein Inserat \"{listing.title}\" wurde eingereicht und wird geprueft. "
-            "Sobald es freigeschaltet ist, ist es fuer Mieter sichtbar. Du kannst gleich ein "
-            "weiteres Inserat beschreiben, wenn du moechtest."
+            f"✅ Danke! Dein Inserat \"{listing.title}\" wurde eingereicht und wird geprüft. "
+            "Sobald es freigeschaltet ist, ist es für Mieter sichtbar. Du kannst gleich ein "
+            "weiteres Inserat beschreiben, wenn du möchtest."
         )
         session.add_display("bot", antwort)
         return [antwort]
@@ -799,10 +799,10 @@ class ChatService:
         ob er ihn direkt oder mit einem Hinweis kombiniert anzeigt."""
         session.pending_search_slot = slot
         if slot == "rooms":
-            session.pending_interactive = InteractivePrompt("list", ROOMS_OPTIONS, "Zimmer waehlen")
+            session.pending_interactive = InteractivePrompt("list", ROOMS_OPTIONS, "Zimmer wählen")
             return "Wie viele Zimmer suchst du mindestens?"
         if slot == "property_type":
-            session.pending_interactive = InteractivePrompt("list", PROPERTY_TYPE_OPTIONS, "Objekttyp waehlen")
+            session.pending_interactive = InteractivePrompt("list", PROPERTY_TYPE_OPTIONS, "Objekttyp wählen")
             return "Welche Art von Objekt suchst du?"
         session.pending_interactive = None
         return "Bis zu welchem Preis pro Monat (CHF)? Antworte mit einer Zahl oder 'egal'."
@@ -860,7 +860,7 @@ class ChatService:
 
         if not treffer:
             rueckfrage = (
-                f"Moechtest du fuer '{_format_criteria(criteria)}' ein Suchabo anlegen? "
+                f"Möchtest du für '{_format_criteria(criteria)}' ein Suchabo anlegen? "
                 "Dann melde ich mich automatisch, sobald ein neues passendes Inserat "
                 "reinkommt - egal von welchem Anbieter. (ja/nein)"
             )
@@ -909,7 +909,7 @@ class ChatService:
 
         immobilie = self._immobilien_repo.get_by_id(ids[index])
         if immobilie is None:
-            antwort = "Dieses Inserat ist leider nicht mehr verfuegbar. Sag mir einfach, wenn du nochmal suchen willst."
+            antwort = "Dieses Inserat ist leider nicht mehr verfügbar. Sag mir einfach, wenn du nochmal suchen willst."
             session.add_display("bot", antwort)
             return [antwort]
 
@@ -927,7 +927,7 @@ class ChatService:
         das separat verschickte Bild/die Kontaktzeile."""
         session.pending_criteria = criteria
         text = (
-            f"Moechtest du fuer '{_format_criteria(criteria)}' ausserdem ein Suchabo anlegen? "
+            f"Möchtest du für '{_format_criteria(criteria)}' ausserdem ein Suchabo anlegen? "
             "Dann melde ich mich automatisch, sobald ein neues passendes Inserat reinkommt - "
             "egal von welchem Anbieter. (ja/nein)"
         )
@@ -961,7 +961,7 @@ class ChatService:
             session.pending_criteria = None
             return "Alles klar, kein Suchabo angelegt. Sag mir einfach, wenn du eine neue Suche starten willst."
         session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
-        return "Bitte antworte mit 'ja' oder 'nein' - moechtest du das Suchabo anlegen?"
+        return "Bitte antworte mit 'ja' oder 'nein' - möchtest du das Suchabo anlegen?"
 
     def _handle_pending_lead(self, session: Session, text: str) -> str:
         antwort = text.strip().lower()

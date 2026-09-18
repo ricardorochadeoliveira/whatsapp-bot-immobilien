@@ -80,7 +80,7 @@ class FirmaService:
 
         auth_user_id = data.get("id") or (data.get("user") or {}).get("id")
         if not auth_user_id:
-            raise FirmaAuthError("Supabase hat keine Nutzer-ID zurueckgegeben.")
+            raise FirmaAuthError("Supabase hat keine Nutzer-ID zurückgegeben.")
 
         return self._firma_repo.add(Firma(name=name, email=email, auth_user_id=auth_user_id))
 

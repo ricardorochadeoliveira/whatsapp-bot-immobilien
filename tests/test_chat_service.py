@@ -261,7 +261,7 @@ def test_vermieter_email_wird_validiert():
     _bis_email_frage(service, phone)
 
     antwort = service.handle_message(phone, "keine-email")
-    assert "gueltige" in antwort[0].lower()
+    assert "gültige" in antwort[0].lower()
     assert service.get_session(phone).vermieter_step == "email"
 
     antwort = service.handle_message(phone, "vermieter@example.com")
@@ -387,7 +387,7 @@ def test_wiederkehrender_vermieter_mit_konto_wird_direkt_erkannt():
 
     antwort = service.handle_message(phone, "hallo")
     antwort = service.handle_message(phone, "Vermieter")
-    assert "Willkommen zurueck" in antwort[0]
+    assert "Willkommen zurück" in antwort[0]
     assert "Testfirma AG" in antwort[0]
     assert service.get_session(phone).vermieter_step == "done"
 
