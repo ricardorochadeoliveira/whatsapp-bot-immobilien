@@ -540,7 +540,7 @@ class ChatService:
         antwort = (
             "Möchtest du dein Inserat lieber direkt auf unserer Webseite "
             "erstellen? Das geht oft schneller: wohnchat.ch/firma.html. Oder "
-            "ich führe dich hier im Chat durch die Erfassung - dann richte "
+            "ich führe dich hier im Chat durch die Erfassung. Dann richte "
             "ich dir dabei gleich ein Konto ein, mit dem du dich auch auf der "
             "Webseite einloggen kannst."
         )
@@ -568,7 +568,7 @@ class ChatService:
         session.pending_interactive = InteractivePrompt("button", VERMIETER_TYP_OPTIONS)
         if any(w in normalized for w in WEBSITE_WOERTER):
             hinweis = (
-                "Klar, hier nochmal der Link: wohnchat.ch/firma.html - dort kannst "
+                "Klar, hier nochmal der Link: wohnchat.ch/firma.html. Dort kannst "
                 "du dich registrieren und dein Inserat direkt erfassen. Falls du "
                 "lieber hier weitermachst, kein Problem:"
             )
@@ -862,7 +862,7 @@ class ChatService:
             rueckfrage = (
                 f"Möchtest du für '{_format_criteria(criteria)}' ein Suchabo anlegen? "
                 "Dann melde ich mich automatisch, sobald ein neues passendes Inserat "
-                "reinkommt - egal von welchem Anbieter. (ja/nein)"
+                "reinkommt, egal von welchem Anbieter. (ja/nein)"
             )
             session.pending_criteria = criteria
             session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
@@ -928,7 +928,7 @@ class ChatService:
         session.pending_criteria = criteria
         text = (
             f"Möchtest du für '{_format_criteria(criteria)}' ausserdem ein Suchabo anlegen? "
-            "Dann melde ich mich automatisch, sobald ein neues passendes Inserat reinkommt - "
+            "Dann melde ich mich automatisch, sobald ein neues passendes Inserat reinkommt, "
             "egal von welchem Anbieter. (ja/nein)"
         )
         self._schedule_delay(
@@ -961,7 +961,7 @@ class ChatService:
             session.pending_criteria = None
             return "Alles klar, kein Suchabo angelegt. Sag mir einfach, wenn du eine neue Suche starten willst."
         session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
-        return "Bitte antworte mit 'ja' oder 'nein' - möchtest du das Suchabo anlegen?"
+        return "Möchtest du das Suchabo anlegen? Bitte antworte mit 'ja' oder 'nein'."
 
     def _handle_pending_lead(self, session: Session, text: str) -> str:
         antwort = text.strip().lower()
@@ -980,4 +980,4 @@ class ChatService:
             session.pending_lead = None
             return "Alles klar, kein Interesse vermerkt."
         session.pending_interactive = InteractivePrompt("button", JA_NEIN_OPTIONS)
-        return "Bitte antworte mit 'ja' oder 'nein' - hast du Interesse an diesem Inserat?"
+        return "Hast du Interesse an diesem Inserat? Bitte antworte mit 'ja' oder 'nein'."
