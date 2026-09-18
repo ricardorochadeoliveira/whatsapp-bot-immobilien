@@ -168,6 +168,43 @@ def test_suchtreffer_mit_bild_wird_als_foto_versendet():
     )
 
 
+def test_treffer_mit_mehreren_bildern_verschickt_bis_zu_drei():
+    image_sender = MagicMock()
+    service, _, immobilien_repo, *_ = make_service(image_sender=image_sender)
+    immobilien_repo.add(
+        Immobilie(
+            id="i-viele-bilder",
+            titel="Wohnung mit vielen Fotos",
+            zimmer=3,
+            kanton="Nidwalden",
+            ort="Stans",
+            preis=2000,
+            objekttyp="Wohnung",
+            flaeche_m2=80,
+            link="https://example.com/inserate/neu",
+            bilder=[f"https://picsum.photos/seed/foto{i}/800/600" for i in range(5)],
+        )
+    )
+    phone = "+41790000049"
+    _als_mieter(service, phone)
+    criteria = SearchCriteria(canton="Nidwalden")
+
+    with patch.object(
+        chat_service_module, "extract_intent", return_value=IntentExtractionResult(criteria=criteria)
+    ):
+        service.handle_message(phone, "Ich suche etwas in Nidwalden, egal was")
+    for antwort in ("egal", "egal", "egal"):
+        service.handle_message(phone, antwort)
+
+    assert image_sender.call_count == 3
+    gesendete_urls = [call.args[1] for call in image_sender.call_args_list]
+    assert gesendete_urls == [
+        "https://picsum.photos/seed/foto0/800/600",
+        "https://picsum.photos/seed/foto1/800/600",
+        "https://picsum.photos/seed/foto2/800/600",
+    ]
+
+
 def test_full_flow_no_suchprofil_on_no():
     service, suchprofil_repo, *_ = make_service()
     _als_mieter(service, "+41790000002")

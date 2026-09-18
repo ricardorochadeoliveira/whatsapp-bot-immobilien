@@ -151,6 +151,11 @@ PLACEHOLDER_LINK = "https://example.com/inserate/neu"
 # Verzoegerung kam die Rueckfrage teils VOR dem Bild an, was verwirrend wirkt.
 SUCHABO_FRAGE_DELAY_SECONDS = 6
 
+# Wie viele Bilder eines Inserats bei einem Treffer maximal verschickt
+# werden - mehr als eins, damit sich der Kunde ein besseres Bild machen
+# kann, aber begrenzt, um den Chat nicht mit Bildern zu ueberladen.
+MAX_BILDER_PRO_TREFFER = 3
+
 
 @dataclass
 class PendingLead:
@@ -363,6 +368,13 @@ class ChatService:
         if self._image_sender is not None:
             self._image_sender(session.telefonnummer, image_url, caption)
 
+    def _send_proactive_images(self, session: Session, immobilie: Immobilie) -> None:
+        """Verschickt bis zu MAX_BILDER_PRO_TREFFER Bilder eines Inserats -
+        jedes als eigene proaktive Nachricht, gleiche Bildunterschrift wie
+        bisher bei einem einzelnen Bild."""
+        for bild in immobilie.bilder[:MAX_BILDER_PRO_TREFFER]:
+            self._send_proactive_image(session, bild, immobilie.titel)
+
     def _send_proactive_button(self, session: Session, text: str, options: list[tuple[str, str]]) -> None:
         # pending_interactive wird ERST hier (beim tatsaechlichen Versand)
         # gesetzt, nicht schon beim Planen des verzoegerten Versands - sonst
@@ -392,8 +404,7 @@ class ChatService:
             f"{immobilie.zimmer} Zimmer | CHF {immobilie.preis}.- | {immobilie.link}"
         )
         self._send_proactive(session, text)
-        if immobilie.bilder:
-            self._send_proactive_image(session, immobilie.bilder[0], immobilie.titel)
+        self._send_proactive_images(session, immobilie)
 
         if self._lead_repo is not None and immobilie.firma_id is not None:
             self._send_proactive(session, "Hast du Interesse an diesem Inserat? (ja/nein)")
@@ -896,8 +907,7 @@ class ChatService:
         kontakt_text = _format_kontakt(immobilie, firma)
         if self._lead_repo is not None and immobilie.firma_id is not None:
             self._lead_repo.add(Lead(immobilie_id=immobilie.id, firma_id=immobilie.firma_id))
-        if immobilie.bilder:
-            self._send_proactive_image(session, immobilie.bilder[0], immobilie.titel)
+        self._send_proactive_images(session, immobilie)
         return kontakt_text
 
     def _handle_listing_choice(self, session: Session, text: str) -> list[str]:
